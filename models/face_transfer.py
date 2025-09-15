@@ -27,6 +27,36 @@ class TransferCell(nn.Module):
             # Note: Original paper implementation used nn.Tanh(). This was changed to LeakyReLU.
             self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.LeakyReLU(True)))
 
+    def forward(self, idd_vec, att_vec):
+        """Process a pair of latent vectors (idd, att) and return updated pair.
+
+        Inputs are 2D tensors of shape [N, 512]. We concatenate along channel
+        dimension where required to feed 1024-d inputs to selectors/shifters.
+        """
+        # Ensure shapes are [N, 512]
+        if idd_vec.dim() == 1:
+            idd_vec = idd_vec.unsqueeze(0)
+        if att_vec.dim() == 1:
+            att_vec = att_vec.unsqueeze(0)
+
+        concat = torch.cat([idd_vec, att_vec], dim=1)  # [N, 1024]
+
+        new_idd = idd_vec
+        new_att = att_vec
+        for i in range(self.num_blocks):
+            idd_gamma = self.idd_selectors[i](concat)
+            idd_beta = self.idd_shifters[i](concat)
+            new_idd = new_idd * (1 + idd_gamma) + idd_beta
+
+            att_gamma = self.att_selectors[i](concat)
+            att_beta = self.att_shifters[i](concat)
+            new_att = new_att * (1 + att_gamma) + att_beta
+
+            # Refresh concat for subsequent blocks
+            concat = torch.cat([new_idd, new_att], dim=1)
+
+        return self.act(new_idd), self.act(new_att)
+
 class InjectionBlock(nn.Module):
     def __init__(self):
         super(InjectionBlock, self).__init__()
@@ -122,8 +152,9 @@ class FaceTransferModule(nn.Module):
             N = idd.size(0)
             latents = []
             for i in range(self.num_latents):
-                new_latent = self.blocks[i](idd_high[:, i], att_high[:, i])
-                latents.append(new_latent)
+                # InjectionBlock expects a tuple-like (idd, att)
+                new_latent = self.blocks[i]((idd_high[:, i], att_high[:, i]))
+                latents.append(new_latent.unsqueeze(1))
             latents = torch.cat(latents, 1)
             return torch.cat([att_low, latents], 1)
         

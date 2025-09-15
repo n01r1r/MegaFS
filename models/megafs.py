@@ -174,9 +174,10 @@ class MegaFS(object):
             att_struct = struct[0].unsqueeze_(0)  # 타겟 이미지의 구조 [1, C, H, W]
 
             swapped_lats = self.swapper(idd_lats, att_lats)
-            
-            # Generator 호출 - strucs 파라미터 제거됨 (repository 버전과 일치)
-            fake_swap, _ = self.generator([swapped_lats, None], randomize_noise=True)
+
+            # StyleGAN2 Generator는 styles 리스트만 받습니다.
+            # 단일 스타일만 사용할 경우 한 개의 텐서만 담아 전달합니다.
+            fake_swap, _ = self.generator([swapped_lats], randomize_noise=True)
 
             fake_swap_max = torch.max(fake_swap)
             fake_swap_min = torch.min(fake_swap)
@@ -187,11 +188,11 @@ class MegaFS(object):
     def refine(self, swapped_tensor):
         """Refine swapped face by re-encoding and generating."""
         with torch.no_grad():
-            # Issue 1 Fix: Pass both struct and lats to the generator.
+            # 스왑 결과를 재인코딩하여 latent만 사용해 재생성합니다.
             lats, struct = self.encoder(swapped_tensor.cuda())
 
-            # Issue 4 Fix: Set randomize_noise to False for deterministic results.
-            fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
+            # Generator는 styles만 입력으로 받습니다. 결정적 출력을 위해 randomize_noise=False.
+            fake_refine, _ = self.generator([lats], randomize_noise=False)
 
             # Denormalization process remains the same.
             fake_refine_max = torch.max(fake_refine)
