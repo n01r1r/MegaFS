@@ -53,13 +53,13 @@ class MegaFS(object):
         self.checkpoint_dir = checkpoint_dir
         self.data_map = data_map
 
-        # Model - MegaFS 방식
-        num_blocks = 3 if self.swap_type == "ftm" else 1
-        latent_split = [4, 6, 8]
+        # Model - align with reference implementation
+        num_blocks = 1 if self.swap_type == "ftm" else 1  # reference uses 1 for both in inference
+        latent_split = [3, 4, 11]
         num_latents = 18
         swap_indice = 4
         self.encoder = HieRFE(resnet50(False), num_latents=latent_split, depth=50).cuda()
-        self.swapper = FaceTransferModule(num_blocks=num_blocks, swap_indice=swap_indice, num_latents=num_latents, typ=self.swap_type).cuda()
+        self.swapper = FaceTransferModule(swap_type=self.swap_type, num_blocks=num_blocks, swap_indice=swap_indice, num_latents=num_latents).cuda()
 
         # 체크포인트 로드
         ckpt_e = os.path.join(self.checkpoint_dir, "{}_final.pth".format(self.swap_type))
@@ -88,19 +88,46 @@ class MegaFS(object):
         self.generator.eval()
         self.smooth_mask.eval()
 
-    def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Read source and target image pair"""
+    def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        """Read source and target image pair. Mask is optional and may be None."""
+        def _normalize_path(candidate_path: Optional[str], is_image: bool) -> Optional[str]:
+            if candidate_path is None or not isinstance(candidate_path, str) or len(candidate_path) == 0:
+                return None
+            # If already absolute and exists, return as-is
+            if os.path.isabs(candidate_path) and os.path.exists(candidate_path):
+                return candidate_path
+            # Normalize slashes
+            rel = candidate_path.replace("\\", "/").lstrip("/\\")
+            # Compute dataset root as parent of img_root
+            dataset_root = os.path.abspath(os.path.join(self.img_root, os.pardir))
+            # If rel starts with known top-level folder names, join from dataset root
+            if rel.startswith("CelebA-HQ-img/") or rel.startswith("CelebAMask-HQ-mask-anno/"):
+                abs_path = os.path.normpath(os.path.join(dataset_root, rel))
+                if os.path.exists(abs_path):
+                    return abs_path
+            # Otherwise, try joining with the appropriate base root
+            base = self.img_root if is_image else self.mask_root
+            abs_path = os.path.normpath(os.path.join(base, rel))
+            return abs_path
         # If a data_map was provided, prefer it to resolve exact file paths
         if self.data_map is not None and isinstance(self.data_map, dict):
             if src_idx in self.data_map and tgt_idx in self.data_map:
-                src_path = self.data_map[src_idx]["image_path"]
-                tgt_path = self.data_map[tgt_idx]["image_path"]
-                mask_entry = self.data_map[tgt_idx].get("mask_path")
+                src_rec = self.data_map[src_idx]
+                tgt_rec = self.data_map[tgt_idx]
+
+                src_path = _normalize_path(src_rec.get("image_path"), is_image=True)
+                tgt_path = _normalize_path(tgt_rec.get("image_path"), is_image=True)
+
+                # Accept either 'mask_path' or 'mask_paths' (list) in mapping
+                mask_entry = tgt_rec.get("mask_path")
+                if mask_entry is None:
+                    mask_entry = tgt_rec.get("mask_paths")
+
                 # Support both string and list of masks; choose the first when list is provided
                 if isinstance(mask_entry, list):
-                    mask_path = mask_entry[0] if len(mask_entry) > 0 else None
+                    mask_path = _normalize_path(mask_entry[0] if len(mask_entry) > 0 else None, is_image=False)
                 else:
-                    mask_path = mask_entry
+                    mask_path = _normalize_path(mask_entry, is_image=False)
             else:
                 # Fallback to legacy convention when ids are not present
                 src_path = os.path.join(self.img_root, "{}.jpg".format(src_idx))
@@ -116,24 +143,25 @@ class MegaFS(object):
             raise FileNotFoundError(f"Source image not found: {src_path}")
         if not os.path.exists(tgt_path):
             raise FileNotFoundError(f"Target image not found: {tgt_path}")
+        # Mask is optional; allow missing
         if mask_path is None or not os.path.exists(mask_path):
-            raise FileNotFoundError(f"Target mask not found: {mask_path}")
+            tgt_mask = None
+        else:
+            tgt_mask = cv2.imread(mask_path)
         
         src_face = cv2.imread(src_path)
         tgt_face = cv2.imread(tgt_path)
-        tgt_mask = cv2.imread(mask_path)
         
         # 이미지 읽기 확인
         if src_face is None:
             raise ValueError(f"Cannot read source image: {src_path}")
         if tgt_face is None:
             raise ValueError(f"Cannot read target image: {tgt_path}")
-        if tgt_mask is None:
-            raise ValueError(f"Cannot read target mask: {mask_path}")
 
         src_face_rgb = src_face[:, :, ::-1]
         tgt_face_rgb = tgt_face[:, :, ::-1]
-        tgt_mask = encode_segmentation_rgb(tgt_mask)
+        if tgt_mask is not None:
+            tgt_mask = encode_segmentation_rgb(tgt_mask)
         return src_face_rgb, tgt_face_rgb, tgt_mask
 
     def preprocess(self, src: np.ndarray, tgt: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -185,7 +213,8 @@ class MegaFS(object):
 
             # StyleGAN2 Generator는 styles 리스트만 받습니다.
             # 단일 스타일만 사용할 경우 한 개의 텐서만 담아 전달합니다.
-            fake_swap, _ = self.generator([swapped_lats], randomize_noise=True)
+            # Reference generator takes (strucs, styles)
+            fake_swap, _ = self.generator(att_struct, [swapped_lats], randomize_noise=True)
 
             fake_swap_max = torch.max(fake_swap)
             fake_swap_min = torch.min(fake_swap)
@@ -200,7 +229,7 @@ class MegaFS(object):
             lats, struct = self.encoder(swapped_tensor.cuda())
 
             # Generator는 styles만 입력으로 받습니다. 결정적 출력을 위해 randomize_noise=False.
-            fake_refine, _ = self.generator([lats], randomize_noise=False)
+            fake_refine, _ = self.generator(att_struct, [lats], randomize_noise=False)
 
             # Denormalization process remains the same.
             fake_refine_max = torch.max(fake_refine)
@@ -209,8 +238,14 @@ class MegaFS(object):
             fake_refine_numpy = denormed_fake_refine.permute((1, 2, 0)).cpu().numpy()
         return fake_refine_numpy
 
-    def postprocess(self, swapped_face: np.ndarray, target: np.ndarray, target_mask: np.ndarray) -> np.ndarray:
-        """Postprocess swapped face with mask blending"""
+    def postprocess(self, swapped_face: np.ndarray, target: np.ndarray, target_mask: Optional[np.ndarray]) -> np.ndarray:
+        """Postprocess swapped face with optional mask blending.
+
+        If target_mask is None, return swapped_face converted to BGR uint8.
+        """
+        if target_mask is None:
+            return swapped_face[:,:,::-1].astype(np.uint8)
+
         target_mask = cv2.resize(target_mask, (self.size,  self.size))
 
         mask_tensor = torch.from_numpy(target_mask.copy().transpose((2, 0, 1))).float().mul_(1/255.0).cuda()

@@ -17,16 +17,20 @@ class TransferCell(nn.Module):
         self.att_selectors = nn.ModuleList()
         self.att_shifters = nn.ModuleList()
 
+        # Pre-projectors to 512-d if incoming feature dims differ
+        self.pre_idd = nn.LazyLinear(512)
+        self.pre_att = nn.LazyLinear(512)
+
         self.act = nn.LeakyReLU(True)
 
         for i in range(self.num_blocks):
             self.idd_selectors.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Sigmoid()))
             # Note: Original paper implementation used nn.Tanh(). This was changed to LeakyReLU.
-            self.idd_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.LeakyReLU(True)))
+            self.idd_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Tanh()))
 
             self.att_selectors.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Sigmoid()))
             # Note: Original paper implementation used nn.Tanh(). This was changed to LeakyReLU.
-            self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.LeakyReLU(True)))
+            self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Tanh()))
 
     def forward(self, idd_vec: torch.Tensor, att_vec: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Process a pair of latent vectors (idd, att) and return updated pair.
@@ -40,6 +44,20 @@ class TransferCell(nn.Module):
         if att_vec.dim() == 1:
             att_vec = att_vec.unsqueeze(0)
 
+        # Flatten, then if feature dim is a multiple of 512, average-fold to 512
+        idd_vec = idd_vec.view(idd_vec.shape[0], -1)
+        att_vec = att_vec.view(att_vec.shape[0], -1)
+        if idd_vec.shape[1] != 512 and idd_vec.shape[1] % 512 == 0:
+            fold = idd_vec.shape[1] // 512
+            idd_vec = idd_vec.view(idd_vec.shape[0], fold, 512).mean(dim=1)
+        if att_vec.shape[1] != 512 and att_vec.shape[1] % 512 == 0:
+            fold = att_vec.shape[1] // 512
+            att_vec = att_vec.view(att_vec.shape[0], fold, 512).mean(dim=1)
+        # If still not 512, project
+        if idd_vec.shape[1] != 512:
+            idd_vec = self.pre_idd(idd_vec)
+        if att_vec.shape[1] != 512:
+            att_vec = self.pre_att(att_vec)
         concat = torch.cat([idd_vec, att_vec], dim=1)  # [N, 1024]
 
         new_idd = idd_vec
@@ -135,11 +153,25 @@ class FaceTransferModule(nn.Module):
             idds = []
             atts = []
             for i in range(self.num_latents):
-                new_idd, new_att = self.blocks[i](idd_high[:, i], att_high[:, i])
-                idds.append(new_idd)
-                atts.append(new_att)
-            idds = torch.cat(idds, 1)
-            atts = torch.cat(atts, 1)
+                # Ensure per-latent slices are [N, 512]
+                idd_i = idd_high[:, i]
+                att_i = att_high[:, i]
+                if idd_i.dim() > 2:
+                    idd_i = idd_i.view(idd_i.shape[0], -1)
+                if att_i.dim() > 2:
+                    att_i = att_i.view(att_i.shape[0], -1)
+                if idd_i.shape[1] != 512 and idd_i.shape[1] % 512 == 0:
+                    fold = idd_i.shape[1] // 512
+                    idd_i = idd_i.view(idd_i.shape[0], fold, 512).mean(dim=1)
+                if att_i.shape[1] != 512 and att_i.shape[1] % 512 == 0:
+                    fold = att_i.shape[1] // 512
+                    att_i = att_i.view(att_i.shape[0], fold, 512).mean(dim=1)
+                new_idd, new_att = self.blocks[i](idd_i, att_i)
+                # keep per-latent dimension
+                idds.append(new_idd.unsqueeze(1))  # [N,1,512]
+                atts.append(new_att.unsqueeze(1))  # [N,1,512]
+            idds = torch.cat(idds, 1)  # [N, num_latents, 512]
+            atts = torch.cat(atts, 1)  # [N, num_latents, 512]
             scale = torch.sigmoid(self.weight).expand(N, -1, -1)
             latents = scale * idds + (1-scale) * atts
 

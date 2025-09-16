@@ -169,20 +169,23 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         return self._forward_impl(x)
-    
+
     def forward_fpn(self, x):
-        """FPN용 forward 메서드 - 중간 레이어들의 출력을 반환"""
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
-        c1 = self.layer1(x)  # 1/4 크기
-        c2 = self.layer2(c1)  # 1/8 크기
-        c3 = self.layer3(c2)  # 1/16 크기
-        c4 = self.layer4(c3)  # 1/32 크기
-
-        return c1, c2, c3, c4
+        x = self.layer1(x)
+        c1 = self.layer2(x)
+        c2 = self.layer3(c1)
+        c3 = self.layer4(c2)
+        # layer5 may not exist if omega_only
+        if hasattr(self, 'layer5'):
+            c4 = self.layer5(c3)
+            return c1, c2, c3, c4
+        else:
+            return c1, c2, c3
 
 
 def _resnet(arch, block, layers, **kwargs):
@@ -191,18 +194,34 @@ def _resnet(arch, block, layers, **kwargs):
 
 
 def resnet50(omega_only=False, **kwargs):
-    """Constructs a ResNet-50 model."""
+    """Constructs a ResNet-50 model with optional layer5 like reference."""
     model = _resnet('resnet50', Bottleneck, [3, 4, 6, 3], **kwargs)
+    # Emulate reference extra layer by appending another Bottleneck block group when not omega_only
     if not omega_only:
+        # Create layer5 (stride=2) similar to reference
+        model.layer5 = model._make_layer(Bottleneck, 512, 2, stride=2)
+        def forward_fpn_full(x):
+            x = model.conv1(x)
+            x = model.bn1(x)
+            x = model.relu(x)
+            x = model.maxpool(x)
+            x = model.layer1(x)
+            c1 = model.layer2(x)
+            c2 = model.layer3(c1)
+            c3 = model.layer4(c2)
+            c4 = model.layer5(c3)
+            return c1, c2, c3, c4
+        model.forward_fpn = forward_fpn_full
         return model
     else:
-        # Return only the first 3 layers for omega_only mode
-        return nn.Sequential(
-            model.conv1,
-            model.bn1,
-            model.relu,
-            model.maxpool,
-            model.layer1,
-            model.layer2,
-            model.layer3
-        )
+        def forward_fpn_omega(x):
+            x = model.conv1(x)
+            x = model.bn1(x)
+            x = model.relu(x)
+            x = model.maxpool(x)
+            c1 = model.layer1(x)
+            c2 = model.layer2(c1)
+            c3 = model.layer3(c2)
+            return c1, c2, c3
+        model.forward_fpn = forward_fpn_omega
+        return model

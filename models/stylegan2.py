@@ -469,6 +469,7 @@ class Generator(nn.Module):
 
     def forward(
         self,
+        strucs,
         styles,
         return_latents=False,
         inject_index=None,
@@ -478,8 +479,6 @@ class Generator(nn.Module):
         noise=None,
         randomize_noise=True,
     ):
-        # Note: Removed 'strucs' parameter as per user request to align with repository
-        
         if not input_is_latent:
             styles = [self.style(s) for s in styles]
 
@@ -518,7 +517,14 @@ class Generator(nn.Module):
 
                 latent = torch.cat([latent, latent2], 1)
         
-        out = self.input(latent)  # Removed strucs parameter usage
+        if isinstance(strucs, torch.Tensor):
+            # Expect strucs shape [N, C, 4, 4]; if smaller spatial sizes, downsample to 4x4
+            if strucs.dim() == 4 and (strucs.shape[2] != 4 or strucs.shape[3] != 4):
+                out = F.adaptive_avg_pool2d(strucs, (4, 4))
+            else:
+                out = strucs
+        else:
+            out = self.input(latent)
         out = self.conv1(out, latent[:, 0], noise=noise[0])
 
         skip = self.to_rgb1(out, latent[:, 1])
