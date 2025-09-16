@@ -5,6 +5,7 @@ Based on One-Shot-Face-Swapping-on-Megapixels repository
 
 import torch
 import torch.nn as nn
+from typing import Tuple
 
 
 class TransferCell(nn.Module):
@@ -27,7 +28,7 @@ class TransferCell(nn.Module):
             # Note: Original paper implementation used nn.Tanh(). This was changed to LeakyReLU.
             self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.LeakyReLU(True)))
 
-    def forward(self, idd_vec, att_vec):
+    def forward(self, idd_vec: torch.Tensor, att_vec: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Process a pair of latent vectors (idd, att) and return updated pair.
 
         Inputs are 2D tensors of shape [N, 512]. We concatenate along channel
@@ -65,7 +66,7 @@ class InjectionBlock(nn.Module):
         self.idd_shifters = nn.Linear(512, 512)
         self.att_bns = nn.BatchNorm1d(512, affine=False)
 
-    def forward(self, x):
+    def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         idd, att = x[0], x[1]
         normalized = self.att_bns(att)
         actv = self.idd_linears(idd)
@@ -89,7 +90,7 @@ class InjectionResBlock(nn.Module):
             self.att_path1.append(InjectionBlock())
             self.att_path2.append(InjectionBlock())
 
-    def forward(self, idd, att):
+    def forward(self, idd: torch.Tensor, att: torch.Tensor) -> torch.Tensor:
         for i in range(self.num_blocks):
             att_bias = att * 1
             att = self.att_path1[i]((idd, att))
@@ -98,14 +99,14 @@ class InjectionResBlock(nn.Module):
         return self.act(att.unsqueeze(1))
 
 
-def LCR(idd, att, swap_indice=4):
+def LCR(idd: torch.Tensor, att: torch.Tensor, swap_indice: int = 4) -> torch.Tensor:
     """Latent Code Replacement function"""
     swapped = torch.cat([att[:, :swap_indice], idd[:, swap_indice:]], 1)
     return swapped
 
 
 class FaceTransferModule(nn.Module):
-    def __init__(self, swap_type="ftm", num_blocks=3, swap_indice=4, num_latents=18):
+    def __init__(self, swap_type: str = "ftm", num_blocks: int = 3, swap_indice: int = 4, num_latents: int = 18):
         super(FaceTransferModule, self).__init__()
         self.type = swap_type
         self.swap_indice = swap_indice
@@ -124,7 +125,7 @@ class FaceTransferModule(nn.Module):
         elif self.type != "lcr":
             raise NotImplementedError("swap_type is not supported!")
         
-    def forward(self, idd, att):
+    def forward(self, idd: torch.Tensor, att: torch.Tensor) -> torch.Tensor:
         if self.type == "ftm":
             att_low = att[:, :self.swap_indice]
             idd_high = idd[:, self.swap_indice:]

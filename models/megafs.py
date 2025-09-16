@@ -38,10 +38,13 @@ def encode_segmentation_rgb(segmentation, no_neck=True):
     return np.stack([face_map, mouth_map, hair_map], axis=2)
 
 
+from typing import Any, Dict, Optional, Tuple
+
+
 class MegaFS(object):
     """MegaFS class for face swapping"""
     
-    def __init__(self, swap_type, img_root, mask_root, checkpoint_dir="weights", data_map=None):
+    def __init__(self, swap_type: str, img_root: str, mask_root: str, checkpoint_dir: str = "weights", data_map: Optional[Dict[int, Dict[str, Any]]] = None):
         # Inference Parameters
         self.size = 1024
         self.swap_type = swap_type
@@ -85,14 +88,19 @@ class MegaFS(object):
         self.generator.eval()
         self.smooth_mask.eval()
 
-    def read_pair(self, src_idx, tgt_idx):
+    def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Read source and target image pair"""
         # If a data_map was provided, prefer it to resolve exact file paths
         if self.data_map is not None and isinstance(self.data_map, dict):
             if src_idx in self.data_map and tgt_idx in self.data_map:
                 src_path = self.data_map[src_idx]["image_path"]
                 tgt_path = self.data_map[tgt_idx]["image_path"]
-                mask_path = self.data_map[tgt_idx]["mask_path"]
+                mask_entry = self.data_map[tgt_idx].get("mask_path")
+                # Support both string and list of masks; choose the first when list is provided
+                if isinstance(mask_entry, list):
+                    mask_path = mask_entry[0] if len(mask_entry) > 0 else None
+                else:
+                    mask_path = mask_entry
             else:
                 # Fallback to legacy convention when ids are not present
                 src_path = os.path.join(self.img_root, "{}.jpg".format(src_idx))
@@ -108,7 +116,7 @@ class MegaFS(object):
             raise FileNotFoundError(f"Source image not found: {src_path}")
         if not os.path.exists(tgt_path):
             raise FileNotFoundError(f"Target image not found: {tgt_path}")
-        if not os.path.exists(mask_path):
+        if mask_path is None or not os.path.exists(mask_path):
             raise FileNotFoundError(f"Target mask not found: {mask_path}")
         
         src_face = cv2.imread(src_path)
@@ -128,7 +136,7 @@ class MegaFS(object):
         tgt_mask = encode_segmentation_rgb(tgt_mask)
         return src_face_rgb, tgt_face_rgb, tgt_mask
 
-    def preprocess(self, src, tgt):
+    def preprocess(self, src: np.ndarray, tgt: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         """Preprocess images for model input"""
         src = cv2.resize(src.copy(), (256, 256))
         tgt = cv2.resize(tgt.copy(), (256, 256))
@@ -140,7 +148,7 @@ class MegaFS(object):
 
         return src.unsqueeze_(0), tgt.unsqueeze_(0)
 
-    def run(self, src_idx, tgt_idx, refine=True, save_path=None):
+    def run(self, src_idx: int, tgt_idx: int, refine: bool = True, save_path: Optional[str] = None):
         """Run face swapping"""
         src_face_rgb, tgt_face_rgb, tgt_mask = self.read_pair(src_idx, tgt_idx)
         source, target = self.preprocess(src_face_rgb, tgt_face_rgb)
@@ -153,7 +161,7 @@ class MegaFS(object):
             swapped_tensor, _ = self.preprocess(swapped_face[:,:,::-1], swapped_face)
             refined_face = self.refine(swapped_tensor)
             refined_face = self.postprocess(refined_face, tgt_face_rgb, tgt_mask)
-            result = np.hstack((result, swapped_face))
+            result = np.hstack((result, refined_face))
 
         if save_path:
             cv2.imwrite(save_path, result)
@@ -161,7 +169,7 @@ class MegaFS(object):
         else:
             return None, result
 
-    def swap(self, source, target):
+    def swap(self, source: torch.Tensor, target: torch.Tensor) -> np.ndarray:
         """Perform face swapping"""
         with torch.no_grad():
             ts = torch.cat([target, source], dim=0).cuda()
@@ -185,7 +193,7 @@ class MegaFS(object):
             fake_swap_numpy = denormed_fake_swap.permute((1, 2, 0)).cpu().numpy()
         return fake_swap_numpy
 
-    def refine(self, swapped_tensor):
+    def refine(self, swapped_tensor: torch.Tensor) -> np.ndarray:
         """Refine swapped face by re-encoding and generating."""
         with torch.no_grad():
             # 스왑 결과를 재인코딩하여 latent만 사용해 재생성합니다.
@@ -201,7 +209,7 @@ class MegaFS(object):
             fake_refine_numpy = denormed_fake_refine.permute((1, 2, 0)).cpu().numpy()
         return fake_refine_numpy
 
-    def postprocess(self, swapped_face, target, target_mask):
+    def postprocess(self, swapped_face: np.ndarray, target: np.ndarray, target_mask: np.ndarray) -> np.ndarray:
         """Postprocess swapped face with mask blending"""
         target_mask = cv2.resize(target_mask, (self.size,  self.size))
 

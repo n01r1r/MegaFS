@@ -25,10 +25,38 @@ Unofficial implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" 
 ### Install dependencies
 
 ```bash
-pip install torch torchvision opencv-python numpy tqdm
+pip install -r requirements.txt
 ```
 
-For CUDA support, install PyTorch with CUDA from the [official PyTorch website](https://pytorch.org/get-started/locally/).
+For CUDA support, install a CUDA-enabled PyTorch matching your system from the [official PyTorch website](https://pytorch.org/get-started/locally/).
+
+## Features
+
+- Hierarchical representation encoder (HieRFE) for richer facial details
+- Multiple swap modes: FTM, ID Injection, and LCR
+- StyleGAN2-based synthesis for stable, high-quality outputs
+- Data path mapping utility (`create_datamap.py`) for robust dataset routing
+
+## Setup
+
+1) Dataset
+   - Download CelebA‑HQ and CelebAMask‑HQ (or equivalent). Ensure the following structure under your dataset root:
+     - `CelebA-HQ-img/` with `<id>.jpg`
+     - `CelebAMask-HQ-mask-anno/` with subfolders containing `<id>_*.png`
+
+2) Weights
+   - Place MegaFS checkpoints and StyleGAN2 weights in `weights/`:
+     - `{swap_type}_final.pth` (e.g., `ftm_final.pth`)
+     - `stylegan2-ffhq-config-f.pth`
+
+3) Data map
+   - From the dataset root, generate a data map once:
+     - `python create_datamap.py`
+   - Pass the loaded mapping to `MegaFS` as shown below.
+
+## Usage
+
+Basic programmatic usage:
 
 ## Datasets
 
