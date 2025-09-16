@@ -21,6 +21,7 @@ def build_data_map(base_dir: str, img_dir: str, mask_dir: str) -> dict:
     - image ids are inferred from image filenames like '<id>.jpg'
     - masks are searched under subfolders using pattern '<id>_*.png'
     - paths in the mapping are stored relative to base_dir for portability
+    - includes ALL images and ALL masks for each image
     """
     base_dir = os.path.abspath(base_dir)
     img_dir_abs = os.path.abspath(img_dir)
@@ -35,28 +36,36 @@ def build_data_map(base_dir: str, img_dir: str, mask_dir: str) -> dict:
     image_map = {os.path.splitext(os.path.basename(p))[0]: p for p in image_paths}
 
     tqdm = try_import_tqdm()
-    data_map: dict[int, dict[str, str]] = {}
+    data_map: dict[int, dict[str, str | list[str]]] = {}
 
     print(f"Found {len(image_map)} images. Searching corresponding masks...")
     for img_id_str, img_path in tqdm(image_map.items(), desc="MAPPING"):
         mask_search_pattern = os.path.join(mask_dir_abs, '*', f"{img_id_str}_*.png")
         mask_paths = glob(mask_search_pattern)
-        if not mask_paths:
-            continue
-
+        
         relative_img_path = os.path.relpath(img_path, base_dir)
-        relative_mask_path = os.path.relpath(mask_paths[0], base_dir)
-
+        
         try:
             img_id = int(img_id_str)
         except ValueError:
             # skip non-numeric ids to keep consistency with numeric indexing
             continue
 
-        data_map[img_id] = {
-            "image_path": relative_img_path,
-            "mask_path": relative_mask_path,
-        }
+        if mask_paths:
+            # Include all mask paths for this image
+            relative_mask_paths = [os.path.relpath(mask_path, base_dir) for mask_path in mask_paths]
+            data_map[img_id] = {
+                "image_path": relative_img_path,
+                "mask_paths": relative_mask_paths,
+                "mask_count": len(relative_mask_paths)
+            }
+        else:
+            # Include image even if no masks found
+            data_map[img_id] = {
+                "image_path": relative_img_path,
+                "mask_paths": [],
+                "mask_count": 0
+            }
 
     return data_map
 

@@ -12,6 +12,24 @@ Unofficial implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" 
 - CelebA‑HQ is non‑commercial; the upstream swapped datasets are distributed under Creative Commons CC BY‑NC 4.0 per the reference repo.
 - This repository is for research and educational purposes only. If you use or distribute models/data, ensure compliance with the original licenses and any third‑party terms.
 
+## Installation
+
+### Requirements
+
+- Python 3.7+
+- PyTorch 1.7+ (with CUDA support recommended)
+- OpenCV (`opencv-python`)
+- NumPy
+- tqdm (optional, for progress bars)
+
+### Install dependencies
+
+```bash
+pip install torch torchvision opencv-python numpy tqdm
+```
+
+For CUDA support, install PyTorch with CUDA from the [official PyTorch website](https://pytorch.org/get-started/locally/).
+
 ## Datasets
 
 - Training/Inference commonly use CelebA‑HQ images and parsing masks (e.g., CelebAMask‑HQ annotations). Directory convention assumed by this repo:
@@ -62,12 +80,6 @@ megafs = MegaFS(
     data_map=data_map,
 )
 ```
-
-## Implementation Notes
-
-- `models/megafs.py`: Aligned StyleGAN2 `Generator` calls to the reference interface.
-- `models/face_transfer.py`: Implemented `TransferCell.forward` and fixed the `injection` path call signature.
-
 
 ## Reference
 
