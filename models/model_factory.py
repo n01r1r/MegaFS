@@ -37,7 +37,8 @@ class ModelFactory:
         weights = loader.load_ftm_weights()  # All methods use same structure
         
         if weights and "e" in weights:
-            encoder.load_state_dict(weights["e"], strict=False)
+            # Use strict=True to ensure full parity with original
+            encoder.load_state_dict(weights["e"], strict=True)
             print(f"SUCCESS: Encoder weights loaded for {swap_type}")
         else:
             print(f"WARNING: No encoder weights found for {swap_type}")
@@ -66,7 +67,7 @@ class ModelFactory:
         weights = loader.load_ftm_weights()  # All methods use same structure
         
         if weights and "s" in weights:
-            swapper.load_state_dict(weights["s"], strict=False)
+            swapper.load_state_dict(weights["s"], strict=True)
             print(f"SUCCESS: Swapper weights loaded for {swap_type}")
         else:
             print(f"WARNING: No swapper weights found for {swap_type}")

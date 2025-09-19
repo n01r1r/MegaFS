@@ -173,7 +173,7 @@ class MegaFS(object):
         target_size = (self.config.model.size, self.config.model.size)
         src_image = ImageProcessor.load_image(src_img_path, target_size=None) if src_img_path else None
         tgt_image = ImageProcessor.load_image(tgt_img_path, target_size=None) if tgt_img_path else None
-        tgt_mask = ImageProcessor.load_image(tgt_mask_path, target_size=target_size) if tgt_mask_path else None
+        tgt_mask = ImageProcessor.load_image(tgt_mask_path, target_size=None) if tgt_mask_path else None
         # If mask PNG not present, attempt to build it from mask-anno on the fly
         if tgt_mask is None and self.config.paths.mask_root:
             try:
@@ -182,19 +182,21 @@ class MegaFS(object):
                 # id string from filename path resolver if available
                 gid = int(tgt_idx)
                 out_png = build_labeled_png(anno_root, gid, out_root)
-                tgt_mask = ImageProcessor.load_image(out_png, target_size=target_size)
+                tgt_mask = ImageProcessor.load_image(out_png, target_size=None)
                 self.debug_logger.log(f"Built mask on-the-fly: {out_png}")
             except Exception as _:
                 pass
+
+        # Convert labeled PNG to 3-channel (face/mouth/hair) mask as original
+        if tgt_mask is not None:
+            tgt_mask = encode_segmentation_rgb(tgt_mask)
         
         if src_image is None:
             raise FileNotFoundError(f"Source image not found for ID {src_idx}")
         if tgt_image is None:
             raise FileNotFoundError(f"Target image not found for ID {tgt_idx}")
         
-        # Optional alignment to improve quality
-        src_image = ImageProcessor.align_and_resize(src_image, output_size=target_size)
-        tgt_image = ImageProcessor.align_and_resize(tgt_image, output_size=target_size)
+        # For strict parity with original, do not align here; return raw RGB
         return src_image, tgt_image, tgt_mask
 
     def preprocess(self, src: np.ndarray, tgt: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
