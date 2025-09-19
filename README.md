@@ -56,6 +56,24 @@ For CUDA support, install a CUDA-enabled PyTorch matching your system from the [
 
 ## Usage
 
+### Google Colab (Recommended)
+
+The easiest way to use MegaFS is through Google Colab:
+
+1. **Open the notebook**: `MegaFS.ipynb`
+2. **Upload your dataset** to Google Drive:
+   - Upload `celeba_mask_hq.zip` to `/content/drive/MyDrive/Datasets/`
+3. **Upload weight files** to Google Drive:
+   - Place all weight files in `/content/drive/MyDrive/Datasets/weights/`
+4. **Run the notebook**: The notebook will automatically:
+   - Clone this repository
+   - Mount Google Drive
+   - Extract the dataset
+   - Generate data mapping
+   - Initialize the models
+
+### Local Usage
+
 Basic programmatic usage:
 
 ## Datasets
@@ -94,20 +112,35 @@ python create_datamap.py
 Then pass the loaded mapping to `MegaFS`:
 
 ```python
+from config import DEFAULT_CONFIGS
 from models.megafs import MegaFS
-import json, os
 
-with open(os.path.join(".", "data_map.json"), "r", encoding="utf-8") as f:
-    data_map = {int(k): v for k, v in json.load(f).items()}
+# Use predefined configuration
+config = DEFAULT_CONFIGS["local"]  # or "colab" for Colab environment
 
+# Initialize MegaFS with configuration
 megafs = MegaFS(
-    swap_type="ftm",                # or "injection", "lcr"
-    img_root="./CelebA-HQ-img",
-    mask_root="./CelebAMask-HQ-mask-anno",
-    checkpoint_dir="./weights",
-    data_map=data_map,
+    config=config,
+    debug=True  # Enable debug logging
+)
+
+# Run face swap
+result_path, result_image = megafs.run(
+    src_idx=100,
+    tgt_idx=200,
+    refine=True,
+    save_path="result.jpg"
 )
 ```
+
+### Modular Architecture
+
+This implementation features a modular architecture for better debugging and maintenance:
+
+- **`config.py`**: Centralized configuration management
+- **`models/`**: Model definitions and weight loading
+- **`utils/`**: Image processing, data management, and debugging utilities
+- **`MegaFS.ipynb`**: Interactive notebook for Colab usage
 
 ## Reference
 
