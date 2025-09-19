@@ -88,8 +88,14 @@ def verify_all_weights(checkpoint_dir: str = "weights") -> bool:
     for loader in loaders:
         if isinstance(loader, StyleGAN2WeightLoader):
             weights = loader.load_stylegan2_weights()
+        elif isinstance(loader, FTMWeightLoader):
+            weights = loader.load_ftm_weights()
+        elif isinstance(loader, InjectionWeightLoader):
+            weights = loader.load_injection_weights()
+        elif isinstance(loader, LCRWeightLoader):
+            weights = loader.load_lcr_weights()
         else:
-            weights = loader.load_ftm_weights()  # All swap methods have same structure
+            weights = None
         
         if weights is None:
             all_valid = False
