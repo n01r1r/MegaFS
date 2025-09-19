@@ -17,10 +17,6 @@ class TransferCell(nn.Module):
         self.att_selectors = nn.ModuleList()
         self.att_shifters = nn.ModuleList()
 
-        # Pre-projectors to 512-d if incoming feature dims differ
-        self.pre_idd = nn.LazyLinear(512)
-        self.pre_att = nn.LazyLinear(512)
-
         self.act = nn.LeakyReLU(True)
 
         for i in range(self.num_blocks):
@@ -33,46 +29,24 @@ class TransferCell(nn.Module):
             self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Tanh()))
 
     def forward(self, idd_vec: torch.Tensor, att_vec: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Process a pair of latent vectors (idd, att) and return updated pair.
-
-        Inputs are 2D tensors of shape [N, 512]. We concatenate along channel
-        dimension where required to feed 1024-d inputs to selectors/shifters.
-        """
-        # Ensure shapes are [N, 512]
+        # Expect [N, 512] for both; keep exactly as original implementation
         if idd_vec.dim() == 1:
             idd_vec = idd_vec.unsqueeze(0)
         if att_vec.dim() == 1:
             att_vec = att_vec.unsqueeze(0)
 
-        # Flatten, then if feature dim is a multiple of 512, average-fold to 512
-        idd_vec = idd_vec.view(idd_vec.shape[0], -1)
-        att_vec = att_vec.view(att_vec.shape[0], -1)
-        if idd_vec.shape[1] != 512 and idd_vec.shape[1] % 512 == 0:
-            fold = idd_vec.shape[1] // 512
-            idd_vec = idd_vec.view(idd_vec.shape[0], fold, 512).mean(dim=1)
-        if att_vec.shape[1] != 512 and att_vec.shape[1] % 512 == 0:
-            fold = att_vec.shape[1] // 512
-            att_vec = att_vec.view(att_vec.shape[0], fold, 512).mean(dim=1)
-        # If still not 512, project
-        if idd_vec.shape[1] != 512:
-            idd_vec = self.pre_idd(idd_vec)
-        if att_vec.shape[1] != 512:
-            att_vec = self.pre_att(att_vec)
-        concat = torch.cat([idd_vec, att_vec], dim=1)  # [N, 1024]
-
         new_idd = idd_vec
         new_att = att_vec
         for i in range(self.num_blocks):
+            concat = torch.cat([new_idd, new_att], dim=1)
             idd_gamma = self.idd_selectors[i](concat)
             idd_beta = self.idd_shifters[i](concat)
             new_idd = new_idd * (1 + idd_gamma) + idd_beta
 
+            concat = torch.cat([new_idd, new_att], dim=1)
             att_gamma = self.att_selectors[i](concat)
             att_beta = self.att_shifters[i](concat)
             new_att = new_att * (1 + att_gamma) + att_beta
-
-            # Refresh concat for subsequent blocks
-            concat = torch.cat([new_idd, new_att], dim=1)
 
         return new_idd.unsqueeze(1), new_att.unsqueeze(1)
 
@@ -153,23 +127,9 @@ class FaceTransferModule(nn.Module):
             idds = []
             atts = []
             for i in range(self.num_latents):
-                # Ensure per-latent slices are [N, 512]
-                idd_i = idd_high[:, i]
-                att_i = att_high[:, i]
-                if idd_i.dim() > 2:
-                    idd_i = idd_i.view(idd_i.shape[0], -1)
-                if att_i.dim() > 2:
-                    att_i = att_i.view(att_i.shape[0], -1)
-                if idd_i.shape[1] != 512 and idd_i.shape[1] % 512 == 0:
-                    fold = idd_i.shape[1] // 512
-                    idd_i = idd_i.view(idd_i.shape[0], fold, 512).mean(dim=1)
-                if att_i.shape[1] != 512 and att_i.shape[1] % 512 == 0:
-                    fold = att_i.shape[1] // 512
-                    att_i = att_i.view(att_i.shape[0], fold, 512).mean(dim=1)
-                new_idd, new_att = self.blocks[i](idd_i, att_i)
-                # TransferCell already returns unsqueezed tensors
-                idds.append(new_idd)  # [N,1,512]
-                atts.append(new_att)  # [N,1,512]
+                new_idd, new_att = self.blocks[i](idd_high[:, i], att_high[:, i])
+                idds.append(new_idd)
+                atts.append(new_att)
             idds = torch.cat(idds, 1)  # [N, num_latents, 512]
             atts = torch.cat(atts, 1)  # [N, num_latents, 512]
             scale = torch.sigmoid(self.weight).expand(N, -1, -1)
