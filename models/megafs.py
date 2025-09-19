@@ -229,13 +229,13 @@ class MegaFS(object):
             # Postprocess result
             swapped_face = self.postprocess(swapped_face, tgt_face_rgb, tgt_mask)
 
-            # Create result image - convert source and target to BGR like original
-            result = np.hstack((src_face_rgb[:,:,::-1], tgt_face_rgb[:,:,::-1], swapped_face))
+            # Create result image - keep RGB consistently
+            result = np.hstack((src_face_rgb, tgt_face_rgb, swapped_face))
 
             # Refine if requested
             if refine:
                 self.profiler.start_timer("refinement")
-                swapped_tensor, _ = self.preprocess(swapped_face[:,:,::-1], swapped_face)  # BGR like original
+                swapped_tensor, _ = self.preprocess(swapped_face, swapped_face)  # Keep RGB
                 refined_face = self.refine(swapped_tensor)
                 refined_face = self.postprocess(refined_face, tgt_face_rgb, tgt_mask)
                 result = np.hstack((result, refined_face))
@@ -361,5 +361,4 @@ class MegaFS(object):
 
         soft_face_mask = soft_face_mask_tensor.cpu().numpy()[:, :, np.newaxis]
         result =  swapped_face * soft_face_mask + target * (1 - soft_face_mask)
-        result = result[:,:,::-1].astype(np.uint8)  # BGR conversion like original
-        return result
+        return result.astype(np.uint8)  # Keep RGB
