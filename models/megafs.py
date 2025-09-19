@@ -165,9 +165,10 @@ class MegaFS(object):
         tgt_img_path, tgt_mask_path = self.data_manager.resolve_paths_for_id(tgt_idx, self.config.paths.dataset_root)
         
         # Load images using image processor
-        src_image = ImageProcessor.load_image(src_img_path) if src_img_path else None
-        tgt_image = ImageProcessor.load_image(tgt_img_path) if tgt_img_path else None
-        tgt_mask = ImageProcessor.load_image(tgt_mask_path) if tgt_mask_path else None
+        target_size = (self.config.model.size, self.config.model.size)
+        src_image = ImageProcessor.load_image(src_img_path, target_size=target_size) if src_img_path else None
+        tgt_image = ImageProcessor.load_image(tgt_img_path, target_size=target_size) if tgt_img_path else None
+        tgt_mask = ImageProcessor.load_image(tgt_mask_path, target_size=target_size) if tgt_mask_path else None
         
         if src_image is None:
             raise FileNotFoundError(f"Source image not found for ID {src_idx}")
