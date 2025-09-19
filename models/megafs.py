@@ -246,8 +246,8 @@ class MegaFS(object):
                 swapped_lats = self.swapper(idd_lats, att_lats)
                 self.debug_logger.log(f"Swapper output shape: {swapped_lats.shape}")
 
-                # StyleGAN2 Generator는 styles 리스트만 받습니다.
-                # Reference generator takes (strucs, styles) with [latents, None] format
+                # 원본 코드와 동일한 방식으로 generator 호출
+                # [swapped_lats, None] 형태로 직접 전달
                 fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
                 self.debug_logger.log(f"Generator output shape: {fake_swap.shape}")
                 
@@ -271,7 +271,8 @@ class MegaFS(object):
                 lats, struct = self.encoder(swapped_tensor.cuda())
                 self.debug_logger.log(f"Refine encoder output - lats: {lats.shape}, struct: {struct.shape}")
 
-                # Generator는 styles만 입력으로 받습니다. 결정적 출력을 위해 randomize_noise=False.
+                # 원본 코드와 동일한 방식으로 generator 호출
+                # [lats, None] 형태로 직접 전달
                 fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
                 self.debug_logger.log(f"Refine generator output shape: {fake_refine.shape}")
                 
