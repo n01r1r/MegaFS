@@ -74,7 +74,7 @@ class TransferCell(nn.Module):
             # Refresh concat for subsequent blocks
             concat = torch.cat([new_idd, new_att], dim=1)
 
-        return self.act(new_idd), self.act(new_att)
+        return new_idd.unsqueeze(1), new_att.unsqueeze(1)
 
 class InjectionBlock(nn.Module):
     def __init__(self):
@@ -167,9 +167,9 @@ class FaceTransferModule(nn.Module):
                     fold = att_i.shape[1] // 512
                     att_i = att_i.view(att_i.shape[0], fold, 512).mean(dim=1)
                 new_idd, new_att = self.blocks[i](idd_i, att_i)
-                # keep per-latent dimension
-                idds.append(new_idd.unsqueeze(1))  # [N,1,512]
-                atts.append(new_att.unsqueeze(1))  # [N,1,512]
+                # TransferCell already returns unsqueezed tensors
+                idds.append(new_idd)  # [N,1,512]
+                atts.append(new_att)  # [N,1,512]
             idds = torch.cat(idds, 1)  # [N, num_latents, 512]
             atts = torch.cat(atts, 1)  # [N, num_latents, 512]
             scale = torch.sigmoid(self.weight).expand(N, -1, -1)

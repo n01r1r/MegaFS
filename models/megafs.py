@@ -127,6 +127,18 @@ class MegaFS(object):
             if debug:
                 self.debug_logger.log(f"Encoder initialization failed: {e}", "WARNING")
         
+        # Initialize generator with dummy forward pass
+        try:
+            dummy_struct = torch.randn(1, 512, 4, 4).cuda()
+            dummy_lats = torch.randn(1, 18, 512).cuda()
+            with torch.no_grad():
+                _ = self.generator(dummy_struct, [dummy_lats, None], randomize_noise=False)
+            if debug:
+                self.debug_logger.log("Generator LazyModule initialized successfully")
+        except Exception as e:
+            if debug:
+                self.debug_logger.log(f"Generator initialization failed: {e}", "WARNING")
+        
         # Log model information
         if debug:
             try:
@@ -248,6 +260,24 @@ class MegaFS(object):
 
                 # 원본 코드와 동일한 방식으로 generator 호출
                 # [swapped_lats, None] 형태로 직접 전달
+                
+                # 디버깅: generator 호출 전 텐서 상태 확인
+                self.debug_logger.log(f"Generator input - att_struct: {att_struct.shape}, dtype: {att_struct.dtype}")
+                self.debug_logger.log(f"Generator input - swapped_lats: {swapped_lats.shape}, dtype: {swapped_lats.dtype}")
+                self.debug_logger.log(f"Generator input - styles: {[swapped_lats.shape, None]}")
+                
+                # Generator의 파라미터 상태 확인
+                for name, param in self.generator.named_parameters():
+                    if 'weight' in name and param.dim() < 3:
+                        self.debug_logger.log(f"WARNING: Parameter {name} has {param.dim()} dimensions: {param.shape}")
+                    if 'weight' in name and param.numel() == 0:
+                        self.debug_logger.log(f"WARNING: Parameter {name} is empty: {param.shape}")
+                
+                # Generator의 첫 번째 conv layer 확인
+                if hasattr(self.generator, 'conv1'):
+                    conv1_weight = self.generator.conv1.weight
+                    self.debug_logger.log(f"Generator conv1 weight shape: {conv1_weight.shape}, dims: {conv1_weight.dim()}")
+                
                 fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
                 self.debug_logger.log(f"Generator output shape: {fake_swap.shape}")
                 

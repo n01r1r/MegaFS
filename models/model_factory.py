@@ -7,7 +7,7 @@ import torch
 from typing import Optional, Dict, Any
 from .hierfe import HieRFE
 from .face_transfer import FaceTransferModule
-from .stylegan2 import Generator
+from .generator import Generator
 from .resnet import resnet50
 from .weight_loaders import FTMWeightLoader, InjectionWeightLoader, LCRWeightLoader, StyleGAN2WeightLoader
 
