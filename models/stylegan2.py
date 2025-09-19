@@ -245,6 +245,13 @@ class ModulatedConv2d(nn.Module):
             batch * self.out_channel, in_channel, self.kernel_size, self.kernel_size
         )
 
+        # Diagnostic: guard against invalid weight shapes
+        if weight.dim() != 4:
+            print("[ModulatedConv2d] Invalid weight dim:", weight.shape,
+                  " up=", self.upsample, " down=", self.downsample,
+                  " batch=", batch, " in=", in_channel,
+                  " k=", self.kernel_size, " h=", height, " w=", width)
+
         if self.upsample:
             input = input.view(1, batch * in_channel, height, width)
             weight = weight.view(

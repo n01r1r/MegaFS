@@ -59,6 +59,12 @@ class DebugLogger:
             message += f" (keys: {keys})"
         
         self.log(message)
+
+    def log_timing(self, name: str, duration: float):
+        """Log timing information for operations"""
+        if not self.enabled:
+            return
+        self.log(f"TIMING: {name}: {duration:.3f}s")
     
     def save_logs(self, filepath: str):
         """Save logs to file"""
