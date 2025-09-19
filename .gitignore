@@ -1,5 +1,6 @@
 # Dataset directory
 /CelebAMask-HQ/
+/MegaFS_Original/
 
 # Python
 __pycache__/

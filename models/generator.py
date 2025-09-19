@@ -93,7 +93,7 @@ class Generator(nn.Module):
                 )
             )
 
-            self.to_rgbs.append(ToRGB(out_channel, style_dim, upsample=True))
+            self.to_rgbs.append(ToRGB(out_channel, style_dim))
 
             in_channel = out_channel
 
