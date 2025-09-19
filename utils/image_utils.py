@@ -5,7 +5,31 @@ Image processing utilities for MegaFS
 import cv2
 import numpy as np
 import torch
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional
+
+
+def encode_segmentation_rgb(segmentation, no_neck=True):
+    """Convert segmentation mask to 3-channel RGB mask (face/mouth/hair)"""
+    parse = segmentation[:,:,0]
+
+    face_part_ids = [1, 2, 3, 4, 5, 6, 10, 12, 13] if no_neck else [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14]
+    mouth_id = 11
+    hair_id = 17
+    face_map = np.zeros([parse.shape[0], parse.shape[1]])
+    mouth_map = np.zeros([parse.shape[0], parse.shape[1]])
+    hair_map = np.zeros([parse.shape[0], parse.shape[1]])
+
+    for valid_id in face_part_ids:
+        valid_index = np.where(parse==valid_id)
+        face_map[valid_index] = 255
+    valid_index = np.where(parse==mouth_id)
+    mouth_map[valid_index] = 255
+    valid_index = np.where(parse==hair_id)
+    hair_map[valid_index] = 255
+
+    return np.stack([face_map, mouth_map, hair_map], axis=2)
+
+
 import os
 
 

@@ -51,7 +51,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 from models.model_factory import ModelFactory
 from models.weight_loaders import verify_all_weights
-from utils.image_utils import ImageProcessor, ImageLoader
+from utils.image_utils import ImageProcessor, ImageLoader, encode_segmentation_rgb
 from utils.mask_converter import build_labeled_png
 from utils.data_utils import DataMapManager
 from utils.debug_utils import DebugLogger, PerformanceProfiler, check_system_requirements
