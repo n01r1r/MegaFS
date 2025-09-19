@@ -28,27 +28,12 @@ class TransferCell(nn.Module):
             # Note: Original paper implementation used nn.Tanh(). This was changed to LeakyReLU.
             self.att_shifters.append(nn.Sequential(nn.Linear(1024, 256), nn.ReLU(True), nn.Linear(256, 512), nn.Tanh()))
 
-    def forward(self, idd_vec: torch.Tensor, att_vec: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Expect [N, 512] for both; keep exactly as original implementation
-        if idd_vec.dim() == 1:
-            idd_vec = idd_vec.unsqueeze(0)
-        if att_vec.dim() == 1:
-            att_vec = att_vec.unsqueeze(0)
-
-        new_idd = idd_vec
-        new_att = att_vec
+    def forward(self, idd, att):
         for i in range(self.num_blocks):
-            concat = torch.cat([new_idd, new_att], dim=1)
-            idd_gamma = self.idd_selectors[i](concat)
-            idd_beta = self.idd_shifters[i](concat)
-            new_idd = new_idd * (1 + idd_gamma) + idd_beta
-
-            concat = torch.cat([new_idd, new_att], dim=1)
-            att_gamma = self.att_selectors[i](concat)
-            att_beta = self.att_shifters[i](concat)
-            new_att = new_att * (1 + att_gamma) + att_beta
-
-        return new_idd.unsqueeze(1), new_att.unsqueeze(1)
+            fuse = torch.cat([idd, att], dim=1)
+            idd = self.act(idd * self.idd_selectors[i](fuse) + self.idd_shifters[i](fuse))
+            att = self.act(att * self.att_selectors[i](fuse) + self.att_shifters[i](fuse))
+        return idd.unsqueeze(1), att.unsqueeze(1)
 
 class InjectionBlock(nn.Module):
     def __init__(self):
@@ -98,26 +83,32 @@ def LCR(idd: torch.Tensor, att: torch.Tensor, swap_indice: int = 4) -> torch.Ten
 
 
 class FaceTransferModule(nn.Module):
-    def __init__(self, swap_type: str = "ftm", num_blocks: int = 3, swap_indice: int = 4, num_latents: int = 18):
+    def __init__(self, num_blocks=1, swap_indice=4, num_latents=14, typ="ftm"):
         super(FaceTransferModule, self).__init__()
-        self.type = swap_type
-        self.swap_indice = swap_indice
-        self.num_latents = num_latents - swap_indice # L_high의 실제 개수로 계산
-
-        self.blocks = nn.ModuleList()
+        self.type = typ
         if self.type == "ftm":
-            self.weight = nn.Parameter(torch.randn(1, self.num_latents, 512))
+            self.swap_indice = swap_indice
+            self.num_latents = num_latents - swap_indice
+            self.blocks = nn.ModuleList()
             for i in range(self.num_latents):
                 self.blocks.append(TransferCell(num_blocks))
+
+            self.weight = nn.Parameter(torch.randn(1, self.num_latents, 512))
         
         elif self.type == "injection":
+            self.swap_indice = swap_indice
+            self.num_latents = num_latents - swap_indice
+            self.blocks = nn.ModuleList()
             for i in range(self.num_latents):
-                self.blocks.append(InjectionBlock())
+                self.blocks.append(InjectionResBlock(num_blocks))
         
-        elif self.type != "lcr":
-            raise NotImplementedError("swap_type is not supported!")
+        elif self.type == "lcr":
+            self.swap_indice = swap_indice
         
-    def forward(self, idd: torch.Tensor, att: torch.Tensor) -> torch.Tensor:
+        else:
+            raise NotImplementedError()
+        
+    def forward(self, idd, att):
         if self.type == "ftm":
             att_low = att[:, :self.swap_indice]
             idd_high = idd[:, self.swap_indice:]

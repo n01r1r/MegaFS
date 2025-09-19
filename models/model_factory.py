@@ -37,8 +37,8 @@ class ModelFactory:
         weights = loader.load_ftm_weights()  # All methods use same structure
         
         if weights and "e" in weights:
-            # Use strict=False for now until we match exact structure
-            encoder.load_state_dict(weights["e"], strict=False)
+            # Use strict=True like original
+            encoder.load_state_dict(weights["e"], strict=True)
             print(f"SUCCESS: Encoder weights loaded for {swap_type}")
         else:
             print(f"WARNING: No encoder weights found for {swap_type}")
@@ -56,10 +56,10 @@ class ModelFactory:
         swap_indice = 4
         
         swapper = FaceTransferModule(
-            swap_type=swap_type,
             num_blocks=num_blocks,
             swap_indice=swap_indice,
-            num_latents=num_latents
+            num_latents=num_latents,
+            typ=swap_type
         ).cuda()
         
         # Load weights
@@ -67,7 +67,7 @@ class ModelFactory:
         weights = loader.load_ftm_weights()  # All methods use same structure
         
         if weights and "s" in weights:
-            swapper.load_state_dict(weights["s"], strict=False)
+            swapper.load_state_dict(weights["s"], strict=True)
             print(f"SUCCESS: Swapper weights loaded for {swap_type}")
         else:
             print(f"WARNING: No swapper weights found for {swap_type}")
