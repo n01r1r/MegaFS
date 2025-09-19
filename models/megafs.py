@@ -275,7 +275,7 @@ class MegaFS(object):
                 
                 # Generator의 첫 번째 conv layer 확인
                 if hasattr(self.generator, 'conv1'):
-                    conv1_weight = self.generator.conv1.weight
+                    conv1_weight = self.generator.conv1.conv.weight
                     self.debug_logger.log(f"Generator conv1 weight shape: {conv1_weight.shape}, dims: {conv1_weight.dim()}")
                 
                 fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)

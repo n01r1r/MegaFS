@@ -102,6 +102,25 @@ class Generator(nn.Module):
     def get_latent(self, input):
         return self.style(input)
 
+    def make_noise(self):
+        device = self.conv1.conv.weight.device
+
+        noises = [torch.randn(1, 1, 2 ** 2, 2 ** 2, device=device)]
+
+        for i in range(3, self.log_size + 1):
+            for _ in range(2):
+                noises.append(torch.randn(1, 1, 2 ** i, 2 ** i, device=device))
+
+        return noises
+
+    def mean_latent(self, n_latent):
+        latent_in = torch.randn(
+            n_latent, self.style_dim, device=self.input.input.device
+        )
+        latent = self.style(latent_in).mean(0, keepdim=True)
+
+        return latent
+
     def forward(
         self,
         strucs,
@@ -152,14 +171,7 @@ class Generator(nn.Module):
 
                 latent = torch.cat([latent, latent2], 1)
         
-        if isinstance(strucs, torch.Tensor):
-            # Expect strucs shape [N, C, 4, 4]; if smaller spatial sizes, downsample to 4x4
-            if strucs.dim() == 4 and (strucs.shape[2] != 4 or strucs.shape[3] != 4):
-                out = F.adaptive_avg_pool2d(strucs, (4, 4))
-            else:
-                out = strucs
-        else:
-            out = self.input(latent)
+        out = strucs if strucs is not None else self.input(latent)
         out = self.conv1(out, latent[:, 0], noise=noise[0])
 
         skip = self.to_rgb1(out, latent[:, 1])
