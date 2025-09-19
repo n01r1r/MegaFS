@@ -229,14 +229,13 @@ class MegaFS(object):
             # Postprocess result
             swapped_face = self.postprocess(swapped_face, tgt_face_rgb, tgt_mask)
 
-            # Create result image
-            # All images are RGB here; keep RGB until save
-            result = np.hstack((src_face_rgb, tgt_face_rgb, swapped_face))
+            # Create result image - convert source and target to BGR like original
+            result = np.hstack((src_face_rgb[:,:,::-1], tgt_face_rgb[:,:,::-1], swapped_face))
 
             # Refine if requested
             if refine:
                 self.profiler.start_timer("refinement")
-                swapped_tensor, _ = self.preprocess(swapped_face, swapped_face)
+                swapped_tensor, _ = self.preprocess(swapped_face[:,:,::-1], swapped_face)  # BGR like original
                 refined_face = self.refine(swapped_tensor)
                 refined_face = self.postprocess(refined_face, tgt_face_rgb, tgt_mask)
                 result = np.hstack((result, refined_face))
@@ -352,15 +351,9 @@ class MegaFS(object):
             target_mask, (self.config.model.size, self.config.model.size), interpolation=cv2.INTER_NEAREST
         )
 
-        # Convert mask to single-channel [H,W] in 0..1
-        if target_mask.ndim == 3:
-            mask_gray = np.max(target_mask, axis=2)
-        else:
-            mask_gray = target_mask
-        mask_gray = (mask_gray.astype(np.float32) / 255.0)
-
-        # To tensor
-        face_mask_tensor = torch.from_numpy(mask_gray).float().cuda()
+        # Convert mask to tensor and process like original
+        mask_tensor = torch.from_numpy(target_mask.copy().transpose((2, 0, 1))).float().mul_(1/255.0).cuda()
+        face_mask_tensor = mask_tensor[0] + mask_tensor[1]  # face + mouth channels like original
 
         # Apply smooth mask
         soft_face_mask_tensor, _ = self.smooth_mask(face_mask_tensor.unsqueeze_(0).unsqueeze_(0))
@@ -368,4 +361,5 @@ class MegaFS(object):
 
         soft_face_mask = soft_face_mask_tensor.cpu().numpy()[:, :, np.newaxis]
         result =  swapped_face * soft_face_mask + target * (1 - soft_face_mask)
-        return result.astype(np.uint8)
+        result = result[:,:,::-1].astype(np.uint8)  # BGR conversion like original
+        return result
