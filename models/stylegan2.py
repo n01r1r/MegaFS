@@ -47,7 +47,7 @@ class Upsample(nn.Module):
         self.pad = (pad0, pad1)
 
     def forward(self, input):
-        out = F.interpolate(input, scale_factor=self.factor, mode='bilinear', align_corners=True)
+        out = upfirdn2d(input, self.kernel, up=self.factor, pad=self.pad)
         return out
 
 
@@ -67,7 +67,7 @@ class Downsample(nn.Module):
         self.pad = (pad0, pad1)
 
     def forward(self, input):
-        out = F.avg_pool2d(input, kernel_size=self.factor, stride=self.factor)
+        out = upfirdn2d(input, self.kernel, down=self.factor, pad=self.pad)
         return out
 
 
@@ -85,7 +85,7 @@ class Blur(nn.Module):
         self.pad = pad
 
     def forward(self, input):
-        out = F.conv2d(input, self.kernel, padding=self.pad)
+        out = upfirdn2d(input, self.kernel, pad=self.pad)
         return out
 
 
