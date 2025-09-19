@@ -50,6 +50,50 @@ class ImageProcessor:
             tensor = (tensor - 0.5) / 0.5
         
         return tensor
+
+    @staticmethod
+    def align_and_resize(image: np.ndarray, output_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
+        """Align face roughly using OpenCV Haar cascades, then resize.
+        Fallbacks to center-crop + resize if detection fails.
+        Expects RGB image, returns RGB image.
+        """
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            eyes_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
+            if len(faces) > 0:
+                # pick largest face
+                x, y, w, h = max(faces, key=lambda r: r[2] * r[3])
+                roi_gray = gray[y:y+h, x:x+w]
+                eyes = eyes_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15))
+
+                # simple crop around face with margin
+                box_size = int(max(w, h) * 1.6)
+                cx, cy = x + w // 2, y + h // 2
+                x1 = max(0, cx - box_size // 2)
+                y1 = max(0, cy - box_size // 2)
+                x2 = min(image.shape[1], x1 + box_size)
+                y2 = min(image.shape[0], y1 + box_size)
+
+                crop = image[y1:y2, x1:x2]
+                if crop.size == 0:
+                    crop = image
+                aligned = cv2.resize(crop, output_size, interpolation=cv2.INTER_AREA)
+                return aligned
+
+            # fallback center-crop
+            h, w = image.shape[:2]
+            side = min(h, w)
+            x1 = (w - side) // 2
+            y1 = (h - side) // 2
+            crop = image[y1:y1+side, x1:x1+side]
+            return cv2.resize(crop, output_size, interpolation=cv2.INTER_AREA)
+
+        except Exception:
+            # last resort: simple resize
+            return cv2.resize(image, output_size, interpolation=cv2.INTER_AREA)
     
     @staticmethod
     def postprocess_from_model(tensor: torch.Tensor, denormalize: bool = True) -> np.ndarray:

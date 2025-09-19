@@ -106,6 +106,10 @@ class MegaFS(object):
         self.encoder = self.models["encoder"]
         self.swapper = self.models["swapper"]
         self.generator = self.models["generator"]
+        # Force eval for safety
+        self.encoder.eval()
+        self.swapper.eval()
+        self.generator.eval()
         
         # Initialize smooth mask
         from .soft_erosion import SoftErosion
@@ -166,8 +170,8 @@ class MegaFS(object):
         
         # Load images using image processor
         target_size = (self.config.model.size, self.config.model.size)
-        src_image = ImageProcessor.load_image(src_img_path, target_size=target_size) if src_img_path else None
-        tgt_image = ImageProcessor.load_image(tgt_img_path, target_size=target_size) if tgt_img_path else None
+        src_image = ImageProcessor.load_image(src_img_path, target_size=None) if src_img_path else None
+        tgt_image = ImageProcessor.load_image(tgt_img_path, target_size=None) if tgt_img_path else None
         tgt_mask = ImageProcessor.load_image(tgt_mask_path, target_size=target_size) if tgt_mask_path else None
         
         if src_image is None:
@@ -175,6 +179,9 @@ class MegaFS(object):
         if tgt_image is None:
             raise FileNotFoundError(f"Target image not found for ID {tgt_idx}")
         
+        # Optional alignment to improve quality
+        src_image = ImageProcessor.align_and_resize(src_image, output_size=target_size)
+        tgt_image = ImageProcessor.align_and_resize(tgt_image, output_size=target_size)
         return src_image, tgt_image, tgt_mask
 
     def preprocess(self, src: np.ndarray, tgt: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -208,12 +215,13 @@ class MegaFS(object):
             swapped_face = self.postprocess(swapped_face, tgt_face_rgb, tgt_mask)
 
             # Create result image
-            result = np.hstack((src_face_rgb[:,:,::-1], tgt_face_rgb[:,:,::-1], swapped_face))
+            # All images are RGB here; keep RGB until save
+            result = np.hstack((src_face_rgb, tgt_face_rgb, swapped_face))
 
             # Refine if requested
             if refine:
                 self.profiler.start_timer("refinement")
-                swapped_tensor, _ = self.preprocess(swapped_face[:,:,::-1], swapped_face)
+                swapped_tensor, _ = self.preprocess(swapped_face, swapped_face)
                 refined_face = self.refine(swapped_tensor)
                 refined_face = self.postprocess(refined_face, tgt_face_rgb, tgt_mask)
                 result = np.hstack((result, refined_face))
@@ -321,22 +329,28 @@ class MegaFS(object):
     def postprocess(self, swapped_face: np.ndarray, target: np.ndarray, target_mask: Optional[np.ndarray]) -> np.ndarray:
         """Postprocess swapped face with optional mask blending using ImageProcessor"""
         if target_mask is None:
-            # Convert RGB to BGR and return as uint8
-            return swapped_face[:,:,::-1].astype(np.uint8)
+            # Keep RGB and return as uint8
+            return swapped_face.astype(np.uint8)
 
-        # Resize mask to target size
-        target_mask = cv2.resize(target_mask, (self.config.model.size, self.config.model.size))
+        # Resize mask to target size (nearest to preserve labels)
+        target_mask = cv2.resize(
+            target_mask, (self.config.model.size, self.config.model.size), interpolation=cv2.INTER_NEAREST
+        )
 
-        # Convert mask to tensor
-        mask_tensor = torch.from_numpy(target_mask.copy().transpose((2, 0, 1))).float().mul_(1/255.0).cuda()
-        face_mask_tensor = mask_tensor[0] + mask_tensor[1]
+        # Convert mask to single-channel [H,W] in 0..1
+        if target_mask.ndim == 3:
+            mask_gray = np.max(target_mask, axis=2)
+        else:
+            mask_gray = target_mask
+        mask_gray = (mask_gray.astype(np.float32) / 255.0)
+
+        # To tensor
+        face_mask_tensor = torch.from_numpy(mask_gray).float().cuda()
 
         # Apply smooth mask
         soft_face_mask_tensor, _ = self.smooth_mask(face_mask_tensor.unsqueeze_(0).unsqueeze_(0))
         soft_face_mask_tensor.squeeze_()
 
-        soft_face_mask = soft_face_mask_tensor.cpu().numpy()
-        soft_face_mask = soft_face_mask[:, :, np.newaxis]
+        soft_face_mask = soft_face_mask_tensor.cpu().numpy()[:, :, np.newaxis]
         result =  swapped_face * soft_face_mask + target * (1 - soft_face_mask)
-        result = result[:,:,::-1].astype(np.uint8)
-        return result
+        return result.astype(np.uint8)
