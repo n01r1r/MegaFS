@@ -114,9 +114,21 @@ class MegaFS(object):
         
         # Log model information
         if debug:
-            self.debug_logger.log_model_info(self.encoder, "Encoder")
-            self.debug_logger.log_model_info(self.swapper, "Swapper")
-            self.debug_logger.log_model_info(self.generator, "Generator")
+            try:
+                self.debug_logger.log_model_info(self.encoder, "Encoder")
+            except Exception as e:
+                self.debug_logger.log(f"Encoder info logging failed: {e}", "WARNING")
+            
+            try:
+                self.debug_logger.log_model_info(self.swapper, "Swapper")
+            except Exception as e:
+                self.debug_logger.log(f"Swapper info logging failed: {e}", "WARNING")
+            
+            try:
+                self.debug_logger.log_model_info(self.generator, "Generator")
+            except Exception as e:
+                self.debug_logger.log(f"Generator info logging failed: {e}", "WARNING")
+            
             self.debug_logger.log("MegaFS initialization completed successfully")
 
     def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:

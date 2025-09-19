@@ -30,10 +30,12 @@ class DebugLogger:
         if not self.enabled:
             return
         
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        self.log(f"{name} - Total params: {total_params:,}, Trainable: {trainable_params:,}")
+        try:
+            # Simple model info without parameter counting to avoid LazyModule issues
+            device = next(model.parameters()).device if list(model.parameters()) else "unknown"
+            self.log(f"{name} - Device: {device}, Type: {type(model).__name__}")
+        except Exception as e:
+            self.log(f"{name} - Info unavailable: {e}")
     
     def log_memory_usage(self, device: str = "cuda"):
         """Log GPU memory usage"""
