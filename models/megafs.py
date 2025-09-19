@@ -52,6 +52,7 @@ from config import Config
 from models.model_factory import ModelFactory
 from models.weight_loaders import verify_all_weights
 from utils.image_utils import ImageProcessor, ImageLoader
+from utils.mask_converter import build_labeled_png
 from utils.data_utils import DataMapManager
 from utils.debug_utils import DebugLogger, PerformanceProfiler, check_system_requirements
 
@@ -173,6 +174,18 @@ class MegaFS(object):
         src_image = ImageProcessor.load_image(src_img_path, target_size=None) if src_img_path else None
         tgt_image = ImageProcessor.load_image(tgt_img_path, target_size=None) if tgt_img_path else None
         tgt_mask = ImageProcessor.load_image(tgt_mask_path, target_size=target_size) if tgt_mask_path else None
+        # If mask PNG not present, attempt to build it from mask-anno on the fly
+        if tgt_mask is None and self.config.paths.mask_root:
+            try:
+                anno_root = os.path.join(self.config.paths.dataset_root, "CelebAMask-HQ-mask-anno")
+                out_root = os.path.join(self.config.paths.dataset_root, "CelebAMaskHQ-mask")
+                # id string from filename path resolver if available
+                gid = int(tgt_idx)
+                out_png = build_labeled_png(anno_root, gid, out_root)
+                tgt_mask = ImageProcessor.load_image(out_png, target_size=target_size)
+                self.debug_logger.log(f"Built mask on-the-fly: {out_png}")
+            except Exception as _:
+                pass
         
         if src_image is None:
             raise FileNotFoundError(f"Source image not found for ID {src_idx}")
