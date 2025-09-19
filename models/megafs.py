@@ -112,6 +112,21 @@ class MegaFS(object):
         self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7).cuda()
         self.smooth_mask.eval()
         
+        # Initialize LazyModules with dummy forward pass
+        if debug:
+            self.debug_logger.log("Initializing LazyModules with dummy forward pass...")
+        
+        try:
+            # Create dummy input for encoder initialization
+            dummy_input = torch.randn(1, 3, 256, 256).cuda()
+            with torch.no_grad():
+                _ = self.encoder(dummy_input)
+            if debug:
+                self.debug_logger.log("Encoder LazyModule initialized successfully")
+        except Exception as e:
+            if debug:
+                self.debug_logger.log(f"Encoder initialization failed: {e}", "WARNING")
+        
         # Log model information
         if debug:
             try:
@@ -210,20 +225,35 @@ class MegaFS(object):
     def swap(self, source: torch.Tensor, target: torch.Tensor) -> np.ndarray:
         """Perform face swapping"""
         with torch.no_grad():
-            ts = torch.cat([target, source], dim=0).cuda()
-            lats, struct = self.encoder(ts)
+            try:
+                self.debug_logger.log(f"Input shapes - source: {source.shape}, target: {target.shape}")
+                
+                ts = torch.cat([target, source], dim=0).cuda()
+                self.debug_logger.log(f"Concatenated tensor shape: {ts.shape}")
+                
+                lats, struct = self.encoder(ts)
+                self.debug_logger.log(f"Encoder output - lats: {lats.shape}, struct: {struct.shape}")
 
-            # lats는 [2, num_latents, 512] 형태의 텐서
-            # struct는 [2, C, H, W] 형태의 텐서
-            idd_lats = lats[1:]  # 소스 이미지의 latent [1, num_latents, 512]
-            att_lats = lats[0].unsqueeze_(0)  # 타겟 이미지의 latent [1, num_latents, 512]
-            att_struct = struct[0].unsqueeze_(0)  # 타겟 이미지의 구조 [1, C, H, W]
+                # lats는 [2, num_latents, 512] 형태의 텐서
+                # struct는 [2, C, H, W] 형태의 텐서
+                idd_lats = lats[1:]  # 소스 이미지의 latent [1, num_latents, 512]
+                att_lats = lats[0].unsqueeze_(0)  # 타겟 이미지의 latent [1, num_latents, 512]
+                att_struct = struct[0].unsqueeze_(0)  # 타겟 이미지의 구조 [1, C, H, W]
+                
+                self.debug_logger.log(f"Latent shapes - idd_lats: {idd_lats.shape}, att_lats: {att_lats.shape}")
+                self.debug_logger.log(f"Structure shape - att_struct: {att_struct.shape}")
 
-            swapped_lats = self.swapper(idd_lats, att_lats)
+                swapped_lats = self.swapper(idd_lats, att_lats)
+                self.debug_logger.log(f"Swapper output shape: {swapped_lats.shape}")
 
-            # StyleGAN2 Generator는 styles 리스트만 받습니다.
-            # Reference generator takes (strucs, styles) with [latents, None] format
-            fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
+                # StyleGAN2 Generator는 styles 리스트만 받습니다.
+                # Reference generator takes (strucs, styles) with [latents, None] format
+                fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
+                self.debug_logger.log(f"Generator output shape: {fake_swap.shape}")
+                
+            except Exception as e:
+                self.debug_logger.log(f"Error in swap method: {e}", "ERROR")
+                raise
 
             fake_swap_max = torch.max(fake_swap)
             fake_swap_min = torch.min(fake_swap)
@@ -234,11 +264,20 @@ class MegaFS(object):
     def refine(self, swapped_tensor: torch.Tensor) -> np.ndarray:
         """Refine swapped face by re-encoding and generating."""
         with torch.no_grad():
-            # 스왑 결과를 재인코딩하여 latent만 사용해 재생성합니다.
-            lats, struct = self.encoder(swapped_tensor.cuda())
+            try:
+                self.debug_logger.log(f"Refine input shape: {swapped_tensor.shape}")
+                
+                # 스왑 결과를 재인코딩하여 latent만 사용해 재생성합니다.
+                lats, struct = self.encoder(swapped_tensor.cuda())
+                self.debug_logger.log(f"Refine encoder output - lats: {lats.shape}, struct: {struct.shape}")
 
-            # Generator는 styles만 입력으로 받습니다. 결정적 출력을 위해 randomize_noise=False.
-            fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
+                # Generator는 styles만 입력으로 받습니다. 결정적 출력을 위해 randomize_noise=False.
+                fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
+                self.debug_logger.log(f"Refine generator output shape: {fake_refine.shape}")
+                
+            except Exception as e:
+                self.debug_logger.log(f"Error in refine method: {e}", "ERROR")
+                raise
 
             # Denormalization process remains the same.
             fake_refine_max = torch.max(fake_refine)
