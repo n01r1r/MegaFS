@@ -1,115 +1,76 @@
 # MegaFS (Unofficial)
 
-Unofficial implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" with small interface cleanups and a dataset path mapping utility.
+A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" with enhanced debugging capabilities, comprehensive configuration management, and improved maintainability.
 
-- Reference repository: [`zyainfal/One-Shot-Face-Swapping-on-Megapixels`](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
+- **Reference**: [`zyainfal/One-Shot-Face-Swapping-on-Megapixels`](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
+- **Paper**: [`One Shot Face Swapping on Megapixels` (arXiv:2105.04932)](https://arxiv.org/abs/2105.04932)
 
+## Features
 
-## Attribution / License
+- **Modular Architecture**: Clean separation of concerns with dedicated modules for models, utilities, and configuration
+- **Multiple Swap Methods**: Support for FTM, ID Injection, and LCR face swapping techniques
+- **Hierarchical Feature Encoding**: HieRFE encoder for rich facial detail extraction
+- **StyleGAN2 Integration**: High-quality face synthesis with StyleGAN2 generator
+- **Comprehensive Debugging**: Built-in logging, profiling, and system monitoring
+- **Data Management**: Automated dataset mapping and path resolution
+- **Colab Ready**: Interactive Jupyter notebook for Google Colab usage
 
-- The method and official resources are from the CVPR 2021 paper and the reference repository above.
-- Please follow the original dataset and pre-trained weights licenses and terms. The upstream repo references CelebA‑HQ and provides swapped datasets; see their README and license notices.
-- CelebA‑HQ is non‑commercial; the upstream swapped datasets are distributed under Creative Commons CC BY‑NC 4.0 per the reference repo.
-- This repository is for research and educational purposes only. If you use or distribute models/data, ensure compliance with the original licenses and any third‑party terms.
-
-## Installation
-
-### Requirements
+## Requirements
 
 - Python 3.7+
-- PyTorch 1.7+ (with CUDA support recommended)
+- PyTorch 1.7+ (CUDA support recommended)
 - OpenCV (`opencv-python`)
 - NumPy
 - tqdm (optional, for progress bars)
 
-### Install dependencies
+## Installation
 
-```bash
-pip install -r requirements.txt
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/n01r1r/MegaFS.git
+   cd MegaFS
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **For CUDA support**, install a CUDA-enabled PyTorch from the [official PyTorch website](https://pytorch.org/get-started/locally/).
+
+## Project Structure
+
+```
+MegaFS/
+├── models/                 # Core model implementations
+│   ├── megafs.py          # Main MegaFS class
+│   ├── hierfe.py          # Hierarchical Region Feature Encoder
+│   ├── face_transfer.py   # Face transfer modules (FTM, Injection, LCR)
+│   ├── stylegan2.py       # StyleGAN2 generator
+│   ├── model_factory.py   # Model creation factory
+│   └── weight_loaders.py  # Weight loading utilities
+├── utils/                 # Utility modules
+│   ├── data_utils.py      # Data management and mapping
+│   ├── image_utils.py     # Image processing utilities
+│   └── debug_utils.py     # Debugging and profiling tools
+├── config.py              # Configuration management
+├── create_datamap.py      # Dataset mapping utility
+├── MegaFS.ipynb          # Interactive Colab notebook
+└── requirements.txt       # Python dependencies
 ```
 
-For CUDA support, install a CUDA-enabled PyTorch matching your system from the [official PyTorch website](https://pytorch.org/get-started/locally/).
-
-## Features
-
-- Hierarchical representation encoder (HieRFE) for richer facial details
-- Multiple swap modes: FTM, ID Injection, and LCR
-- StyleGAN2-based synthesis for stable, high-quality outputs
-- Data path mapping utility (`create_datamap.py`) for robust dataset routing
-
-## Setup
-
-1) Dataset
-   - Download CelebA‑HQ and CelebAMask‑HQ (or equivalent). Ensure the following structure under your dataset root:
-     - `CelebA-HQ-img/` with `<id>.jpg`
-     - `CelebAMask-HQ-mask-anno/` with subfolders containing `<id>_*.png`
-
-2) Weights
-   - Place MegaFS checkpoints and StyleGAN2 weights in `weights/`:
-     - `{swap_type}_final.pth` (e.g., `ftm_final.pth`)
-     - `stylegan2-ffhq-config-f.pth`
-
-3) Data map
-   - From the dataset root, generate a data map once:
-     - `python create_datamap.py`
-   - Pass the loaded mapping to `MegaFS` as shown below.
-
-## Usage
+## Quick Start
 
 ### Google Colab (Recommended)
-
-The easiest way to use MegaFS is through Google Colab:
 
 1. **Open the notebook**: `MegaFS.ipynb`
 2. **Upload your dataset** to Google Drive:
    - Upload `celeba_mask_hq.zip` to `/content/drive/MyDrive/Datasets/`
 3. **Upload weight files** to Google Drive:
    - Place all weight files in `/content/drive/MyDrive/Datasets/weights/`
-4. **Run the notebook**: The notebook will automatically:
-   - Clone this repository
-   - Mount Google Drive
-   - Extract the dataset
-   - Generate data mapping
-   - Initialize the models
+4. **Run the notebook**: Everything will be set up automatically
 
 ### Local Usage
-
-Basic programmatic usage:
-
-## Datasets
-
-- Training/Inference commonly use CelebA‑HQ images and parsing masks (e.g., CelebAMask‑HQ annotations). Directory convention assumed by this repo:
-  - `CelebA-HQ-img/` contains images named `<id>.jpg`
-  - `CelebAMask-HQ-mask-anno/` contains subfolders with masks named like `<id>_*.png`
-
-Upstream dataset description and download pointers are listed in the reference repo’s README. See: [`zyainfal/One-Shot-Face-Swapping-on-Megapixels`](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
-
-
-## Weights
-
-Place weights under `weights/` (create the folder if it doesn’t exist).
-
-- MegaFS encoder/swapper checkpoint: `{swap_type}_final.pth` (e.g., `ftm_final.pth`)
-- StyleGAN2 generator: `stylegan2-ffhq-config-f.pth`
-
-These files are not provided here. Obtain from the official sources, train them yourself, or convert from compatible releases, respecting the original licenses.
-
-
-## New: Data Path Mapping
-
-This repo adds a simple mapping utility to robustly resolve image/mask paths when directory layouts vary.
-
-- Script: `create_datamap.py`
-- Output: `data_map.json` mapping integer `id` to relative paths:
-  - `{"<id>": {"image_path": "CelebA-HQ-img/<id>.jpg", "mask_path": "CelebAMask-HQ-mask-anno/.../<id>_*.png"}}`
-
-Usage (run from the dataset root that contains both folders):
-
-```bash
-python create_datamap.py
-```
-
-Then pass the loaded mapping to `MegaFS`:
 
 ```python
 from config import DEFAULT_CONFIGS
@@ -133,16 +94,182 @@ result_path, result_image = megafs.run(
 )
 ```
 
-### Modular Architecture
+## Configuration
 
-This implementation features a modular architecture for better debugging and maintenance:
+The modular configuration system supports multiple environments:
 
-- **`config.py`**: Centralized configuration management
-- **`models/`**: Model definitions and weight loading
-- **`utils/`**: Image processing, data management, and debugging utilities
-- **`MegaFS.ipynb`**: Interactive notebook for Colab usage
+```python
+from config import Config, DEFAULT_CONFIGS
 
-## Reference
+# Use predefined configurations
+config = DEFAULT_CONFIGS["local"]    # Local development
+config = DEFAULT_CONFIGS["colab"]    # Google Colab
 
-- Paper: [`One Shot Face Swapping on Megapixels` (arXiv:2105.04932)](https://arxiv.org/abs/2105.04932)
-- Repo: [`zyainfal/One-Shot-Face-Swapping-on-Megapixels`](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
+# Or create custom configuration
+config = Config(
+    swap_type="ftm",                 # "ftm", "injection", or "lcr"
+    dataset_root="./CelebAMask-HQ",
+    img_root="./CelebAMask-HQ/CelebA-HQ-img",
+    mask_root="./CelebAMask-HQ/CelebAMask-HQ-mask-anno",
+    checkpoint_dir="./weights"
+)
+```
+
+## Dataset Setup
+
+### Required Datasets
+
+1. **CelebA-HQ**: High-quality face images
+   - Structure: `CelebA-HQ-img/<id>.jpg`
+2. **CelebAMask-HQ**: Segmentation masks
+   - Structure: `CelebAMask-HQ-mask-anno/*/<id>_*.png`
+
+### Data Mapping
+
+The codebase uses a data mapping system for robust path resolution. The `DataMapManager` class handles automatic path resolution for images and masks:
+
+```python
+from utils.data_utils import DataMapManager
+
+# Initialize data manager
+data_manager = DataMapManager("data_map.json")
+
+# Resolve paths for specific IDs
+image_path, mask_path = data_manager.resolve_paths_for_id(100, dataset_root)
+```
+
+Generate dataset mapping:
+
+```bash
+# Run from dataset root directory
+python create_datamap.py
+```
+
+This creates `data_map.json` with automatic path mapping that the MegaFS class uses internally.
+
+## Weight Files
+
+Place the following weight files in the `weights/` directory:
+
+- **MegaFS checkpoints**: `{swap_type}_final.pth`
+  - `ftm_final.pth`
+  - `injection_final.pth`
+  - `lcr_final.pth`
+- **StyleGAN2 generator**: `stylegan2-ffhq-config-f.pth`
+
+> **Note**: Weight files are not included. Obtain from official sources or train your own models.
+
+## Architecture
+
+### Core Components
+
+1. **HieRFE (Hierarchical Region Feature Encoder)**
+   - ResNet50 backbone with FPN
+   - Multi-scale feature extraction
+   - StyleMapping layers for latent generation
+
+2. **FaceTransferModule**
+   - **FTM**: Transfer Cell with multiple blocks
+   - **Injection**: ID injection with normalization
+   - **LCR**: Latent Code Regularization
+
+3. **StyleGAN2 Generator**
+   - High-resolution face synthesis
+   - 1024x1024 output resolution
+   - 18 latent dimensions
+
+### Processing Pipeline
+
+1. **Preprocessing**: Load and resize images to 256x256
+2. **Encoding**: Extract hierarchical features with HieRFE
+3. **Transfer**: Apply face transfer using selected method
+4. **Generation**: Synthesize high-resolution result with StyleGAN2
+5. **Postprocessing**: Apply mask blending and refinement
+
+## Debugging & Profiling
+
+The modular design includes comprehensive debugging tools:
+
+```python
+# Enable debug logging
+megafs = MegaFS(config=config, debug=True)
+
+# Access debug utilities
+megafs.debug_logger.log("Custom message")
+megafs.profiler.start_timer("operation")
+# ... perform operation ...
+duration = megafs.profiler.end_timer("operation")
+```
+
+## Usage Examples
+
+### Single Image Swap
+
+```python
+# Basic face swap
+result_path, result_image = megafs.run(
+    src_idx=100,      # Source image ID
+    tgt_idx=200,      # Target image ID
+    refine=True,       # Apply refinement
+    save_path="swap_result.jpg"
+)
+```
+
+### Batch Processing
+
+```python
+# Process multiple pairs
+pairs = [(100, 200), (300, 400), (500, 600)]
+for src_id, tgt_id in pairs:
+    result_path, result_image = megafs.run(
+        src_idx=src_id,
+        tgt_idx=tgt_id,
+        refine=True
+    )
+```
+
+### Custom Configuration
+
+```python
+# Advanced configuration
+from config import Config
+
+config = Config(
+    swap_type="injection",
+    dataset_root="/path/to/dataset",
+    img_root="/path/to/images",
+    mask_root="/path/to/masks",
+    checkpoint_dir="/path/to/weights"
+)
+
+megafs = MegaFS(config=config, debug=True)
+```
+
+## Contributing
+
+This is an unofficial implementation focused on modularity and maintainability. Contributions are welcome for:
+
+- Bug fixes and improvements
+- Additional swap methods
+- Performance optimizations
+- Documentation enhancements
+
+## License
+
+- **Method**: Based on CVPR 2021 paper "One Shot Face Swapping on Megapixels"
+- **Datasets**: CelebA-HQ is non-commercial; follow original licenses
+- **Usage**: Research and educational purposes only
+- **Compliance**: Ensure adherence to original dataset and model licenses
+
+## Acknowledgments
+
+- Original paper authors and the reference implementation
+- StyleGAN2 authors for the generator architecture
+- CelebA-HQ and CelebAMask-HQ dataset creators
+
+## References
+
+- [Original Paper](https://arxiv.org/abs/2105.04932)
+- [Reference Implementation](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
+- [StyleGAN2](https://github.com/NVlabs/stylegan2)
+- [CelebA-HQ Dataset](https://github.com/tkarras/progressive_growing_of_gans)
