@@ -138,8 +138,7 @@ class UpFirDn2d(Function):
         )
 
         return grad_input, None, None, None, None, None, None, None, None, None
-
-
+        
 def upfirdn2d(input, kernel, up=1, down=1, pad=(0, 0)):
     # Use native implementation if the CUDA extension is unavailable
     if upfirdn2d_op is None:

@@ -13,7 +13,11 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 - **StyleGAN2 Integration**: High-quality face synthesis with StyleGAN2 generator
 - **Comprehensive Debugging**: Built-in logging, profiling, and system monitoring
 - **Data Management**: Automated dataset mapping and path resolution
-- **Colab Ready**: Interactive Jupyter notebook for Google Colab usage
+- **Image Similarity Evaluation**: Comprehensive metrics including LPIPS, PSNR, SSIM, and MSE
+- **Batch Processing**: Efficient evaluation of multiple image pairs
+- **Statistical Analysis**: Mean, std, min, max, median across all results
+- **Visualization**: Charts and graphs for result analysis
+- **Colab Ready**: Interactive Jupyter notebooks for Google Colab usage
 
 ## Requirements
 
@@ -52,10 +56,12 @@ MegaFS/
 ├── utils/                 # Utility modules
 │   ├── data_utils.py      # Data management and mapping
 │   ├── image_utils.py     # Image processing utilities
-│   └── debug_utils.py     # Debugging and profiling tools
+│   ├── debug_utils.py     # Debugging and profiling tools
+│   └── metrics.py         # Image similarity evaluation metrics
 ├── config.py              # Configuration management
 ├── create_datamap.py      # Dataset mapping utility
 ├── MegaFS.ipynb          # Interactive Colab notebook
+├── MegaFS_Evaluation.ipynb # Image similarity evaluation notebook
 └── requirements.txt       # Python dependencies
 ```
 
@@ -92,6 +98,61 @@ result_path, result_image = megafs.run(
     refine=True,
     save_path="result.jpg"
 )
+```
+
+## Image Similarity Evaluation
+
+The framework includes comprehensive image similarity evaluation capabilities with multiple metrics:
+
+### Available Metrics
+
+- **LPIPS**: Learned Perceptual Image Patch Similarity (lower is better)
+- **PSNR**: Peak Signal-to-Noise Ratio (higher is better)  
+- **SSIM**: Structural Similarity Index (higher is better, range [0,1])
+- **MSE**: Mean Squared Error (lower is better)
+
+### Evaluation Notebook
+
+Use `MegaFS_Evaluation.ipynb` for comprehensive evaluation:
+
+1. **Open the evaluation notebook** in Google Colab
+2. **Upload your dataset** and weight files to Google Drive
+3. **Configure evaluation parameters**:
+   - Evaluation size (number of image pairs)
+   - Swap methods to compare (FTM, Injection, LCR)
+   - Refinement settings
+4. **Run evaluation** - automatically processes all methods
+5. **View results** - statistical analysis and visualizations
+
+### Programmatic Evaluation
+
+```python
+from utils.metrics import ImageMetrics, FaceSwapEvaluator
+from models.megafs import MegaFS
+
+# Initialize evaluator
+evaluator = FaceSwapEvaluator(use_gpu=True)
+
+# Run face swap evaluation
+results = evaluator.evaluate_pair(source_img, target_img, swapped_img, refined_img)
+
+# Calculate statistics across multiple results
+stats = evaluator.calculate_statistics(all_results)
+```
+
+### Batch Evaluation
+
+```python
+# Evaluate multiple image pairs
+batch_results = run_batch_evaluation(
+    handler_instance=megafs_handler,
+    id_pairs=[(100, 200), (300, 400), (500, 600)],
+    refine=True,
+    max_pairs=50
+)
+
+# Generate comprehensive statistics
+statistics = evaluator.calculate_statistics(batch_results)
 ```
 
 ## Configuration
