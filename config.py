@@ -112,5 +112,12 @@ DEFAULT_CONFIGS = {
         img_root="./CelebAMask-HQ/CelebA-HQ-img",
         mask_root="./CelebAMask-HQ/CelebAMask-HQ-mask-anno",
         checkpoint_dir="./weights"
+    ),
+    "evaluation": Config(
+        swap_type="ftm",
+        dataset_root="/content/CelebAMask-HQ",
+        img_root="/content/CelebAMask-HQ/CelebA-HQ-img",
+        mask_root="/content/CelebAMask-HQ/CelebAMask-HQ-mask-anno",
+        checkpoint_dir="/content/drive/MyDrive/Datasets/weights"
     )
 }
