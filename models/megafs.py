@@ -117,51 +117,20 @@ class MegaFS(object):
         self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7).cuda()
         self.smooth_mask.eval()
         
-        # Initialize LazyModules with dummy forward pass
-        if debug:
-            self.debug_logger.log("Initializing LazyModules with dummy forward pass...")
-        
         try:
-            # Create dummy input for encoder initialization
             dummy_input = torch.randn(1, 3, 256, 256).cuda()
             with torch.no_grad():
                 _ = self.encoder(dummy_input)
-            if debug:
-                self.debug_logger.log("Encoder LazyModule initialized successfully")
         except Exception as e:
-            if debug:
-                self.debug_logger.log(f"Encoder initialization failed: {e}", "WARNING")
+            pass
         
-        # Initialize generator with dummy forward pass
         try:
             dummy_struct = torch.randn(1, 512, 4, 4).cuda()
             dummy_lats = torch.randn(1, 18, 512).cuda()
             with torch.no_grad():
                 _ = self.generator(dummy_struct, [dummy_lats, None], randomize_noise=False)
-            if debug:
-                self.debug_logger.log("Generator LazyModule initialized successfully")
         except Exception as e:
-            if debug:
-                self.debug_logger.log(f"Generator initialization failed: {e}", "WARNING")
-        
-        # Log model information
-        if debug:
-            try:
-                self.debug_logger.log_model_info(self.encoder, "Encoder")
-            except Exception as e:
-                self.debug_logger.log(f"Encoder info logging failed: {e}", "WARNING")
-            
-            try:
-                self.debug_logger.log_model_info(self.swapper, "Swapper")
-            except Exception as e:
-                self.debug_logger.log(f"Swapper info logging failed: {e}", "WARNING")
-            
-            try:
-                self.debug_logger.log_model_info(self.generator, "Generator")
-            except Exception as e:
-                self.debug_logger.log(f"Generator info logging failed: {e}", "WARNING")
-            
-            self.debug_logger.log("MegaFS initialization completed successfully")
+            pass
 
     def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
         """Read source and target image pair using data manager."""
@@ -183,7 +152,6 @@ class MegaFS(object):
                 gid = int(tgt_idx)
                 out_png = build_labeled_png(anno_root, gid, out_root)
                 tgt_mask = ImageProcessor.load_image(out_png, target_size=None)
-                self.debug_logger.log(f"Built mask on-the-fly: {out_png}")
             except Exception as _:
                 pass
 
@@ -212,43 +180,25 @@ class MegaFS(object):
         return src_tensor.unsqueeze_(0), tgt_tensor.unsqueeze_(0)
 
     def run(self, src_idx: int, tgt_idx: int, refine: bool = True, save_path: Optional[str] = None):
-        """Run face swapping with improved error handling and logging"""
         try:
-            self.debug_logger.log(f"Starting face swap: {src_idx} -> {tgt_idx}")
-            
-            # Load and preprocess images
             src_face_rgb, tgt_face_rgb, tgt_mask = self.read_pair(src_idx, tgt_idx)
             source, target = self.preprocess(src_face_rgb, tgt_face_rgb)
             
-            # Perform face swapping
-            self.profiler.start_timer("face_swap")
             swapped_face = self.swap(source, target)
-            swap_time = self.profiler.end_timer("face_swap")
-            self.debug_logger.log_timing("Face Swap", swap_time)
-            
-            # Postprocess result
             swapped_face = self.postprocess(swapped_face, tgt_face_rgb, tgt_mask)
 
-            # Create result image - keep RGB consistently
             result = np.hstack((src_face_rgb, tgt_face_rgb, swapped_face))
 
-            # Refine if requested
             if refine:
-                self.profiler.start_timer("refinement")
-                swapped_tensor, _ = self.preprocess(swapped_face, swapped_face)  # Keep RGB
+                swapped_tensor, _ = self.preprocess(swapped_face, swapped_face)
                 refined_face = self.refine(swapped_tensor)
                 refined_face = self.postprocess(refined_face, tgt_face_rgb, tgt_mask)
                 result = np.hstack((result, refined_face))
-                refine_time = self.profiler.end_timer("refinement")
-                self.debug_logger.log_timing("Refinement", refine_time)
 
-            # Save if path provided
             if save_path:
                 if ImageProcessor.save_image(result, save_path):
-                    self.debug_logger.log(f"Result saved: {save_path}")
                     return save_path, result
                 else:
-                    self.debug_logger.log("Failed to save result", "ERROR")
                     return None, result
             else:
                 return None, result
@@ -258,51 +208,17 @@ class MegaFS(object):
             raise
 
     def swap(self, source: torch.Tensor, target: torch.Tensor) -> np.ndarray:
-        """Perform face swapping"""
         with torch.no_grad():
             try:
-                self.debug_logger.log(f"Input shapes - source: {source.shape}, target: {target.shape}")
-                
                 ts = torch.cat([target, source], dim=0).cuda()
-                self.debug_logger.log(f"Concatenated tensor shape: {ts.shape}")
-                
                 lats, struct = self.encoder(ts)
-                self.debug_logger.log(f"Encoder output - lats: {lats.shape}, struct: {struct.shape}")
 
-                # lats는 [2, num_latents, 512] 형태의 텐서
-                # struct는 [2, C, H, W] 형태의 텐서
-                idd_lats = lats[1:]  # 소스 이미지의 latent [1, num_latents, 512]
-                att_lats = lats[0].unsqueeze_(0)  # 타겟 이미지의 latent [1, num_latents, 512]
-                att_struct = struct[0].unsqueeze_(0)  # 타겟 이미지의 구조 [1, C, H, W]
-                
-                self.debug_logger.log(f"Latent shapes - idd_lats: {idd_lats.shape}, att_lats: {att_lats.shape}")
-                self.debug_logger.log(f"Structure shape - att_struct: {att_struct.shape}")
+                idd_lats = lats[1:]
+                att_lats = lats[0].unsqueeze_(0)
+                att_struct = struct[0].unsqueeze_(0)
 
                 swapped_lats = self.swapper(idd_lats, att_lats)
-                self.debug_logger.log(f"Swapper output shape: {swapped_lats.shape}")
-
-                # 원본 코드와 동일한 방식으로 generator 호출
-                # [swapped_lats, None] 형태로 직접 전달
-                
-                # 디버깅: generator 호출 전 텐서 상태 확인
-                self.debug_logger.log(f"Generator input - att_struct: {att_struct.shape}, dtype: {att_struct.dtype}")
-                self.debug_logger.log(f"Generator input - swapped_lats: {swapped_lats.shape}, dtype: {swapped_lats.dtype}")
-                self.debug_logger.log(f"Generator input - styles: {[swapped_lats.shape, None]}")
-                
-                # Generator의 파라미터 상태 확인
-                for name, param in self.generator.named_parameters():
-                    if 'weight' in name and param.dim() < 3:
-                        self.debug_logger.log(f"WARNING: Parameter {name} has {param.dim()} dimensions: {param.shape}")
-                    if 'weight' in name and param.numel() == 0:
-                        self.debug_logger.log(f"WARNING: Parameter {name} is empty: {param.shape}")
-                
-                # Generator의 첫 번째 conv layer 확인
-                if hasattr(self.generator, 'conv1'):
-                    conv1_weight = self.generator.conv1.conv.weight
-                    self.debug_logger.log(f"Generator conv1 weight shape: {conv1_weight.shape}, dims: {conv1_weight.dim()}")
-                
                 fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
-                self.debug_logger.log(f"Generator output shape: {fake_swap.shape}")
                 
             except Exception as e:
                 self.debug_logger.log(f"Error in swap method: {e}", "ERROR")
@@ -315,25 +231,15 @@ class MegaFS(object):
         return fake_swap_numpy
 
     def refine(self, swapped_tensor: torch.Tensor) -> np.ndarray:
-        """Refine swapped face by re-encoding and generating."""
         with torch.no_grad():
             try:
-                self.debug_logger.log(f"Refine input shape: {swapped_tensor.shape}")
-                
-                # 스왑 결과를 재인코딩하여 latent만 사용해 재생성합니다.
                 lats, struct = self.encoder(swapped_tensor.cuda())
-                self.debug_logger.log(f"Refine encoder output - lats: {lats.shape}, struct: {struct.shape}")
-
-                # 원본 코드와 동일한 방식으로 generator 호출
-                # [lats, None] 형태로 직접 전달
                 fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
-                self.debug_logger.log(f"Refine generator output shape: {fake_refine.shape}")
                 
             except Exception as e:
                 self.debug_logger.log(f"Error in refine method: {e}", "ERROR")
                 raise
 
-            # Denormalization process remains the same.
             fake_refine_max = torch.max(fake_refine)
             fake_refine_min = torch.min(fake_refine)
             denormed_fake_refine = (fake_refine[0] - fake_refine_min) / (fake_refine_max - fake_refine_min) * 255.0
