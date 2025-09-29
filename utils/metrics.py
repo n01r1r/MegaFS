@@ -173,8 +173,13 @@ class FaceSwapEvaluator:
                 for metric_name, value in metrics.items():
                     if metric_name not in metric_values[comparison_type]:
                         metric_values[comparison_type][metric_name] = []
-                    if value != float('inf') and not np.isnan(value):
-                        metric_values[comparison_type][metric_name].append(value)
+                    # Safely handle non-numeric values
+                    try:
+                        numeric_value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if numeric_value != float('inf') and not np.isnan(numeric_value):
+                        metric_values[comparison_type][metric_name].append(numeric_value)
         
         for comparison_type, metrics in metric_values.items():
             stats[comparison_type] = {}

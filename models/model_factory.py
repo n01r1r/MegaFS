@@ -81,7 +81,19 @@ class ModelFactory:
             weights = None
         
         if weights and "s" in weights:
-            swapper.load_state_dict(weights["s"], strict=True)
+            state_dict = weights["s"]
+            if swap_type == "injection":
+                import re
+                remapped = {}
+                pattern = re.compile(r"(blocks\.\d+\.(att_path[12])\.(\d+)\.)0\.")
+                for k, v in state_dict.items():
+                    # Collapse only the extra '.0.' immediately after att_pathX.<idx>
+                    new_key = pattern.sub(r"\\1", k)
+                    remapped[new_key] = v
+                # Load non-strict to tolerate any remaining mismatches
+                missing = swapper.load_state_dict(remapped, strict=False)
+            else:
+                missing = swapper.load_state_dict(state_dict, strict=True)
             print(f"SUCCESS: Swapper weights loaded for {swap_type}")
         else:
             print(f"WARNING: No swapper weights found for {swap_type}")
