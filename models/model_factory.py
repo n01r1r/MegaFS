@@ -34,7 +34,14 @@ class ModelFactory:
         
         # Load weights
         loader = self.weight_loaders[swap_type]
-        weights = loader.load_ftm_weights()  # All methods use same structure
+        if swap_type == "ftm":
+            weights = loader.load_ftm_weights()
+        elif swap_type == "injection":
+            weights = loader.load_injection_weights()
+        elif swap_type == "lcr":
+            weights = loader.load_lcr_weights()
+        else:
+            weights = None
         
         if weights and "e" in weights:
             # Use strict=True like original
@@ -64,7 +71,14 @@ class ModelFactory:
         
         # Load weights
         loader = self.weight_loaders[swap_type]
-        weights = loader.load_ftm_weights()  # All methods use same structure
+        if swap_type == "ftm":
+            weights = loader.load_ftm_weights()
+        elif swap_type == "injection":
+            weights = loader.load_injection_weights()
+        elif swap_type == "lcr":
+            weights = loader.load_lcr_weights()
+        else:
+            weights = None
         
         if weights and "s" in weights:
             swapper.load_state_dict(weights["s"], strict=True)
