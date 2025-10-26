@@ -7,14 +7,18 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 
 ## What's New
 
-- **Modern PyTorch Support**: Upgraded to PyTorch 2.1+ with full CUDA 11.x/12.x compatibility
-- **Standard nn.Module Design**: MegaFS now inherits from `torch.nn.Module` for standard PyTorch workflows
-- **Centralized Device Management**: Automatic device detection and management across all components
-- **Gradient Compatibility**: Full support for gradient-based experiments and adversarial attacks
-- **PyTorch Dataset Integration**: Built-in Dataset/DataLoader support with train/val/test splits
-- **YAML Configuration**: Easy experiment configuration management with YAML files
-- **Training Infrastructure**: Modular `BaseTrainer` class for custom experiments
-- **Research-Ready**: Extension points for gradient-based research without modifying core code
+### v3 - Architecture Improvements (Latest)
+- **PyTorch 2.1+ Upgrade**: Full CUDA 11.x/12.x compatibility for modern GPUs (A100, RTX 30xx/40xx)
+- **nn.Module Integration**: MegaFS now inherits from `torch.nn.Module` for standard PyTorch workflows
+- **Device Management**: Automatic device detection and centralized management
+- **Flexible Dataset Loading**: Optional data_map.json with folder-based auto-discovery
+- **Simplified ModelFactory**: Dictionary-based weight loading for maintainability
+
+### Previous Features
+- **Gradient Compatibility**: Full support for gradient-based experiments
+- **PyTorch Dataset Integration**: Built-in Dataset/DataLoader with train/val/test splits
+- **YAML Configuration**: Easy configuration management
+- **Training Infrastructure**: Modular `BaseTrainer` class
 
 ## Features
 
@@ -63,8 +67,13 @@ The project now uses PyTorch 2.1.0, which is compatible with modern CUDA version
    ```bash
    pip install -r requirements.txt
    ```
+   
+   Note: This will install PyTorch 2.1.0 with CUDA support. For CPU-only or custom CUDA versions, follow the [official PyTorch installation guide](https://pytorch.org/get-started/locally/).
 
-3. **For CUDA support**, install a CUDA-enabled PyTorch from the [official PyTorch website](https://pytorch.org/get-started/locally/).
+3. **Verify installation**:
+   ```bash
+   python -c "import torch; print(torch.__version__); print(f'CUDA available: {torch.cuda.is_available()}')"
+   ```
 
 ## Project Structure
 
@@ -231,15 +240,18 @@ The framework now supports gradient-based experiments for research purposes, inc
 ```python
 from config import Config
 from models.megafs import MegaFS
+import torch
 
 # Load configuration from YAML
 config = Config.from_yaml('configs/experiment.yaml')
 
-# Initialize with gradients enabled
-model = MegaFS(config=config, enable_grads=True)
+# Initialize with device and gradients
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+model = MegaFS(config=config, enable_grads=True, device=device)
 
-# Use in gradient-based experiments
-model.set_gradient_mode(True)
+# Use standard PyTorch methods
+model.train()  # Enable gradients
+model.eval()  # Disable gradients
 ```
 
 ### Using PyTorch Dataset
@@ -247,19 +259,29 @@ model.set_gradient_mode(True)
 ```python
 from data import create_dataloaders
 from models.megafs import MegaFS
+import torch
 
 # Create dataloaders with train/val/test splits
+# Option 1: Use data_map.json (recommended for CelebA-HQ)
 dataloaders = create_dataloaders(
-    data_map_path='./data_map.json',
     dataset_root='./dataset/CelebAMask-HQ',
+    data_map_path='./data_map.json',
     batch_size=8,
     num_workers=4
 )
 
+# Option 2: Auto-discover from folder structure (for custom datasets)
+dataloaders_custom = create_dataloaders(
+    dataset_root='./my_custom_images',
+    use_data_map=False,  # No data_map.json needed
+    batch_size=8
+)
+
 # Use in experiments
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 for batch in dataloaders['train']:
-    source = batch['source'].cuda().requires_grad_(True)
-    target = batch['target'].cuda()
+    source = batch['source'].to(device).requires_grad_(True)
+    target = batch['target'].to(device)
     
     # Forward pass with gradients
     output = model.forward(source, target)
