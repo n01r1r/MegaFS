@@ -1,6 +1,8 @@
 # Dataset directory
 /CelebAMask-HQ/
 /MegaFS_Original/
+dataset/
+weights/
 
 # Python
 __pycache__/
@@ -87,3 +89,37 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Model weights and checkpoints (if large)
+*.pth
+*.pt
+*.ckpt
+
+# Large data files
+*.pkl
+*.pickle
+
+# Output directories
+outputs/
+results/
+
+# Image files (comment out if you need to track specific images)
+*.jpg
+*.png
+# But keep Jupyter notebooks and data_map.json
+!*.ipynb
+!data_map.json
+
+# IDE specific files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific
+*.pdf
+# Uncomment if you want to track PDFs

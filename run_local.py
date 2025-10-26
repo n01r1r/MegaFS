@@ -13,7 +13,7 @@ from pathlib import Path
 DEFAULT_DATASET_ROOT = "./dataset/CelebAMask-HQ"
 DEFAULT_DATASET_DIR = "./dataset"
 DEFAULT_WEIGHTS_DIR = "./weights"
-DEFAULT_DATA_MAP = "./MegaFS/data_map.json"
+DEFAULT_DATA_MAP = "./data_map.json"
 
 def setup_environment():
     """Setup and import basic libraries"""
