@@ -1,0 +1,31 @@
+# Configuration for gradient-based experiments
+
+swap_type: ftm
+dataset_root: ./dataset/CelebAMask-HQ
+checkpoint_dir: ./weights
+data_map_path: ./MegaFS/data_map.json
+
+# Experiment-specific settings
+experiment:
+  enable_grads: true  # Enable gradient computation
+  batch_size: 4  # Smaller batch for memory
+  num_workers: 2
+  seed: 42
+  
+  # Gradient experiment settings
+  gradient_checkpoint: false  # Use gradient checkpointing for memory
+  mixed_precision: false  # Use automatic mixed precision
+
+# Data settings
+data_split:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+
+# Logging
+logging:
+  log_dir: ./logs
+  save_frequency: 100
+  visualize_frequency: 50
+
+

@@ -67,7 +67,8 @@ class MegaFS(object):
                  checkpoint_dir: str = "weights",
                  data_map: Optional[Dict[int, Dict[str, Any]]] = None,
                  config: Optional[Config] = None,
-                 debug: bool = True):
+                 debug: bool = True,
+                 enable_grads: bool = False):
         
         # Initialize configuration
         if config is None:
@@ -90,6 +91,9 @@ class MegaFS(object):
         if data_map:
             self.data_manager.data_map = data_map
         
+        # Gradient computation mode
+        self.enable_grads = enable_grads
+        
         # Print configuration
         if debug:
             self.config.print_config()
@@ -107,15 +111,17 @@ class MegaFS(object):
         self.encoder = self.models["encoder"]
         self.swapper = self.models["swapper"]
         self.generator = self.models["generator"]
-        # Force eval for safety
-        self.encoder.eval()
-        self.swapper.eval()
-        self.generator.eval()
+        
+        # Set model mode based on gradient configuration
+        self.set_gradient_mode(self.enable_grads)
         
         # Initialize smooth mask
         from .soft_erosion import SoftErosion
         self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7).cuda()
         self.smooth_mask.eval()
+        
+        if self.enable_grads:
+            self.smooth_mask.train()
         
         try:
             dummy_input = torch.randn(1, 3, 256, 256).cuda()
@@ -131,6 +137,59 @@ class MegaFS(object):
                 _ = self.generator(dummy_struct, [dummy_lats, None], randomize_noise=False)
         except Exception as e:
             pass
+    
+    def set_gradient_mode(self, enabled: bool):
+        """Toggle between eval (inference) and train (gradients) mode"""
+        self.enable_grads = enabled
+        mode = 'train' if enabled else 'eval'
+        
+        # Set mode for all models
+        for model in [self.encoder, self.swapper, self.generator]:
+            getattr(model, mode)()
+        
+        # Set smooth mask mode
+        if enabled:
+            self.smooth_mask.train()
+        else:
+            self.smooth_mask.eval()
+        
+        if self.debug_logger.enabled:
+            status = "ENABLED" if enabled else "DISABLED"
+            self.debug_logger.log(f"Gradient computation {status}", "INFO")
+    
+    def forward(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Clean forward pass that preserves gradients.
+        
+        Args:
+            source: Source image tensor [B, 3, 256, 256]
+            target: Target image tensor [B, 3, 256, 256]
+            
+        Returns:
+            Swapped face tensor [B, 3, 1024, 1024]
+        """
+        # Ensure on correct device
+        source = source.cuda()
+        target = target.cuda()
+        
+        # Concatenate for encoding
+        ts = torch.cat([target, source], dim=0)
+        
+        # Encode
+        lats, struct = self.encoder(ts)
+        
+        # Extract latents
+        idd_lats = lats[1:]  # Source latents
+        att_lats = lats[0].unsqueeze(0)  # Target latents
+        att_struct = struct[0].unsqueeze(0)  # Target structure
+        
+        # Swap
+        swapped_lats = self.swapper(idd_lats, att_lats)
+        
+        # Generate
+        fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
+        
+        return fake_swap
 
     def read_pair(self, src_idx: int, tgt_idx: int) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
         """Read source and target image pair using data manager."""
@@ -207,8 +266,22 @@ class MegaFS(object):
             self.debug_logger.log(f"Error in face swap: {e}", "ERROR")
             raise
 
-    def swap(self, source: torch.Tensor, target: torch.Tensor) -> np.ndarray:
-        with torch.no_grad():
+    def swap(self, source: torch.Tensor, target: torch.Tensor, return_tensor: bool = False) -> torch.Tensor:
+        """
+        Swap faces from source to target.
+        
+        Args:
+            source: Source image tensor
+            target: Target image tensor
+            return_tensor: If True, return tensor. If False, return numpy array (original behavior)
+            
+        Returns:
+            Swapped face as tensor or numpy array
+        """
+        # Choose context based on gradient mode
+        context = torch.enable_grad() if self.enable_grads else torch.no_grad()
+        
+        with context:
             try:
                 ts = torch.cat([target, source], dim=0).cuda()
                 lats, struct = self.encoder(ts)
@@ -224,11 +297,16 @@ class MegaFS(object):
                 self.debug_logger.log(f"Error in swap method: {e}", "ERROR")
                 raise
 
+            # If returning tensor, return raw output
+            if return_tensor:
+                return fake_swap
+            
+            # Original behavior: normalize and convert to numpy
             fake_swap_max = torch.max(fake_swap)
             fake_swap_min = torch.min(fake_swap)
             denormed_fake_swap = (fake_swap[0] - fake_swap_min) / (fake_swap_max - fake_swap_min) * 255.0
             fake_swap_numpy = denormed_fake_swap.permute((1, 2, 0)).cpu().numpy()
-        return fake_swap_numpy
+            return fake_swap_numpy
 
     def refine(self, swapped_tensor: torch.Tensor) -> np.ndarray:
         with torch.no_grad():

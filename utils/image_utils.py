@@ -74,6 +74,27 @@ class ImageProcessor:
             tensor = (tensor - 0.5) / 0.5
         
         return tensor
+    
+    @staticmethod
+    def preprocess_for_model_tensor(tensor: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+        """
+        Differentiable preprocessing for tensors.
+        
+        Args:
+            tensor: Input tensor [C, H, W] or [B, C, H, W] in range [0, 255]
+            normalize: If True, normalize to [-1, 1]. If False, keep in [0, 1]
+            
+        Returns:
+            Preprocessed tensor
+        """
+        # Normalize to [0, 1]
+        tensor = tensor / 255.0
+        
+        if normalize:
+            # Normalize to [-1, 1]
+            tensor = (tensor - 0.5) / 0.5
+        
+        return tensor
 
     @staticmethod
     def align_and_resize(image: np.ndarray, output_size: Tuple[int, int] = (256, 256)) -> np.ndarray:

@@ -4,6 +4,8 @@ Centralized configuration for easier debugging and analysis
 """
 
 import os
+import yaml
+from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -95,6 +97,38 @@ class Config:
         print(f"  Checkpoint Dir: {self.paths.checkpoint_dir}")
         print(f"  Weight File: {self.get_weight_filename()}")
         print(f"  StyleGAN2 File: {self.get_stylegan2_filename()}")
+    
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'Config':
+        """Load configuration from YAML file"""
+        with open(yaml_path, 'r') as f:
+            config_dict = yaml.safe_load(f)
+        
+        return cls(
+            swap_type=config_dict.get('swap_type', 'ftm'),
+            dataset_root=config_dict.get('dataset_root', ''),
+            img_root=config_dict.get('img_root', ''),
+            mask_root=config_dict.get('mask_root', ''),
+            checkpoint_dir=config_dict.get('checkpoint_dir', 'weights')
+        )
+    
+    def to_yaml(self, yaml_path: str):
+        """Save configuration to YAML file"""
+        config_dict = {
+            'swap_type': self.swap.swap_type,
+            'dataset_root': self.paths.dataset_root,
+            'img_root': self.paths.img_root,
+            'mask_root': self.paths.mask_root,
+            'checkpoint_dir': self.paths.checkpoint_dir
+        }
+        
+        # Ensure directory exists
+        Path(yaml_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(yaml_path, 'w') as f:
+            yaml.dump(config_dict, f, default_flow_style=False)
+        
+        print(f"Configuration saved to: {yaml_path}")
 
 
 # Default configurations for different environments

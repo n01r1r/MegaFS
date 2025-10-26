@@ -5,6 +5,14 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 - **Reference**: [`zyainfal/One-Shot-Face-Swapping-on-Megapixels`](https://github.com/zyainfal/One-Shot-Face-Swapping-on-Megapixels)
 - **Paper**: [`One Shot Face Swapping on Megapixels` (arXiv:2105.04932)](https://arxiv.org/abs/2105.04932)
 
+## What's New
+
+- **Gradient Compatibility**: Full support for gradient-based experiments and adversarial attacks
+- **PyTorch Dataset Integration**: Built-in Dataset/DataLoader support with train/val/test splits
+- **YAML Configuration**: Easy experiment configuration management with YAML files
+- **Training Infrastructure**: Modular `BaseTrainer` class for custom experiments
+- **Research-Ready**: Extension points for gradient-based research without modifying core code
+
 ## Features
 
 - **Modular Architecture**: Clean separation of concerns with dedicated modules for models, utilities, and configuration
@@ -18,6 +26,10 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 - **Statistical Analysis**: Mean, std, min, max, median across all results
 - **Visualization**: Charts and graphs for result analysis
 - **Colab Ready**: Interactive Jupyter notebooks for Google Colab usage
+- **Gradient Compatibility**: Full support for gradient-based experiments and attacks
+- **PyTorch Dataset Integration**: Built-in Dataset/DataLoader support for training
+- **YAML Configuration**: Easy configuration management with YAML files
+- **Training Infrastructure**: Modular trainer base class for custom experiments
 
 ## Requirements
 
@@ -26,6 +38,8 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 - OpenCV (`opencv-python`)
 - NumPy
 - tqdm (optional, for progress bars)
+- PyYAML (for YAML configuration support)
+- pytest (for testing, optional)
 
 ## Installation
 
@@ -47,18 +61,28 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 ```
 MegaFS/
 ├── models/                 # Core model implementations
-│   ├── megafs.py          # Main MegaFS class
+│   ├── megafs.py          # Main MegaFS class (with gradient support)
 │   ├── hierfe.py          # Hierarchical Region Feature Encoder
 │   ├── face_transfer.py   # Face transfer modules (FTM, Injection, LCR)
 │   ├── stylegan2.py       # StyleGAN2 generator
 │   ├── model_factory.py   # Model creation factory
 │   └── weight_loaders.py  # Weight loading utilities
+├── data/                   # Dataset integration (NEW)
+│   ├── __init__.py
+│   └── face_swap_dataset.py # PyTorch Dataset with train/val/test splits
+├── training/               # Training infrastructure (NEW)
+│   ├── __init__.py
+│   ├── trainer.py         # Base trainer for experiments
+│   └── example_experiment.py # Example experiment template
+├── configs/                # Configuration files (NEW)
+│   ├── default.yaml       # Default configuration
+│   └── experiment.yaml    # Experiment configuration
 ├── utils/                 # Utility modules
 │   ├── data_utils.py      # Data management and mapping
 │   ├── image_utils.py     # Image processing utilities
 │   ├── debug_utils.py     # Debugging and profiling tools
 │   └── metrics.py         # Image similarity evaluation metrics
-├── config.py              # Configuration management
+├── config.py              # Configuration management (with YAML support)
 ├── create_datamap.py      # Dataset mapping utility
 ├── MegaFS.ipynb          # Interactive Colab notebook
 ├── MegaFS_Evaluation.ipynb # Image similarity evaluation notebook
@@ -77,6 +101,39 @@ MegaFS/
 4. **Run the notebook**: Everything will be set up automatically
 
 ### Local Usage
+
+#### Option 1: Using the Local Runner Script (Easiest)
+
+```bash
+# Basic usage with default settings
+python run_local.py
+
+# Run with custom IDs
+python run_local.py --src-id 100 --tgt-id 200
+
+# Use different swap method
+python run_local.py --swap-type injection
+
+# Custom dataset and weights paths
+python run_local.py --dataset-root ./my_dataset --weights-dir ./my_weights
+
+# Enable gradients for experiments
+python run_local.py --enable-grads
+
+# See all options
+python run_local.py --help
+```
+
+**Key Options:**
+- `--src-id`, `--tgt-id`: Source and target image IDs
+- `--swap-type`: Swap method (`ftm`, `injection`, `lcr`)
+- `--dataset-root`: Path to dataset (default: `./dataset/CelebAMask-HQ`)
+- `--weights-dir`: Path to weights (default: `./weights`)
+- `--output-dir`: Output directory (default: `./outputs`)
+- `--no-refine`: Faster processing without refinement
+- `--enable-grads`: Enable gradients for experiments
+
+#### Option 2: Programmatic Usage
 
 ```python
 from config import DEFAULT_CONFIGS
@@ -153,6 +210,106 @@ batch_results = run_batch_evaluation(
 
 # Generate comprehensive statistics
 statistics = evaluator.calculate_statistics(batch_results)
+```
+
+## Gradient-Based Experiments (NEW)
+
+The framework now supports gradient-based experiments for research purposes, including adversarial attacks:
+
+### Enabling Gradients
+
+```python
+from config import Config
+from models.megafs import MegaFS
+
+# Load configuration from YAML
+config = Config.from_yaml('configs/experiment.yaml')
+
+# Initialize with gradients enabled
+model = MegaFS(config=config, enable_grads=True)
+
+# Use in gradient-based experiments
+model.set_gradient_mode(True)
+```
+
+### Using PyTorch Dataset
+
+```python
+from data import create_dataloaders
+from models.megafs import MegaFS
+
+# Create dataloaders with train/val/test splits
+dataloaders = create_dataloaders(
+    data_map_path='./data_map.json',
+    dataset_root='./dataset/CelebAMask-HQ',
+    batch_size=8,
+    num_workers=4
+)
+
+# Use in experiments
+for batch in dataloaders['train']:
+    source = batch['source'].cuda().requires_grad_(True)
+    target = batch['target'].cuda()
+    
+    # Forward pass with gradients
+    output = model.forward(source, target)
+    
+    # Compute loss and backpropagate
+    loss = your_loss_function(output, target)
+    loss.backward()
+```
+
+### Training Infrastructure
+
+```python
+from training import BaseTrainer
+from training.example_experiment import ExampleExperiment
+
+# Extend BaseTrainer for custom experiments
+class MyExperiment(BaseTrainer):
+    def compute_loss(self, source, target, batch):
+        output = self.model.forward(source, target)
+        return your_custom_loss(output, target)
+
+# Create trainer
+trainer = MyExperiment(
+    model=model,
+    dataloaders=dataloaders,
+    device='cuda'
+)
+
+# Run training
+trainer.fit(num_epochs=10)
+
+# Test
+test_metrics = trainer.test()
+```
+
+### YAML Configuration
+
+Create `configs/experiment.yaml`:
+
+```yaml
+# Experiment configuration
+swap_type: ftm
+dataset_root: ./dataset/CelebAMask-HQ
+checkpoint_dir: ./weights
+
+experiment:
+  enable_grads: true  # Enable gradients
+  batch_size: 4
+  num_workers: 2
+  seed: 42
+
+data_split:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+```
+
+Load configuration:
+```python
+config = Config.from_yaml('configs/experiment.yaml')
 ```
 
 ## Configuration
