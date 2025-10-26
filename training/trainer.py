@@ -34,9 +34,13 @@ class BaseTrainer:
         self.model = model
         self.dataloaders = dataloaders
         self.optimizer = optimizer
-        self.device = device
+        self.device = torch.device(device)
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Move model to device - now works with nn.Module's to() method
+        if hasattr(self.model, 'to'):
+            self.model = self.model.to(self.device)
         
         self.current_epoch = 0
         self.global_step = 0
@@ -49,10 +53,8 @@ class BaseTrainer:
         Returns:
             Dict of metrics (e.g., {'loss': 0.5, 'accuracy': 0.9})
         """
-        if hasattr(self.model, 'train'):
-            self.model.train()
-        elif hasattr(self.model, 'set_gradient_mode'):
-            self.model.set_gradient_mode(True)
+        # Standard PyTorch nn.Module interface
+        self.model.train()
         
         metrics = {}
         total_loss = 0
@@ -87,10 +89,8 @@ class BaseTrainer:
         Run validation.
         Override for custom validation logic.
         """
-        if hasattr(self.model, 'eval'):
-            self.model.eval()
-        elif hasattr(self.model, 'set_gradient_mode'):
-            self.model.set_gradient_mode(False)
+        # Standard PyTorch nn.Module interface
+        self.model.eval()
         
         metrics = {}
         total_loss = 0
@@ -111,10 +111,8 @@ class BaseTrainer:
         Run testing.
         Override for custom test logic.
         """
-        if hasattr(self.model, 'eval'):
-            self.model.eval()
-        elif hasattr(self.model, 'set_gradient_mode'):
-            self.model.set_gradient_mode(False)
+        # Standard PyTorch nn.Module interface
+        self.model.eval()
         
         metrics = {}
         

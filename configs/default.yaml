@@ -3,14 +3,17 @@
 # Model settings
 swap_type: ftm  # Options: ftm, injection, lcr
 
-# Dataset paths
+# Dataset paths (can be overridden via arguments or env variables)
 dataset_root: ./dataset/CelebAMask-HQ
 img_root: ./dataset/CelebAMask-HQ/CelebA-HQ-img
 mask_root: ./dataset/CelebAMask-HQ/CelebAMask-HQ-mask-anno
-data_map_path: ./MegaFS/data_map.json
+data_map_path: ./data_map.json
 
 # Model weights
 checkpoint_dir: ./weights
+
+# Device configuration (auto-detected: cuda if available, else cpu)
+device: cuda  # Options: cuda, cpu, auto
 
 # Model architecture
 model:

@@ -7,6 +7,9 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 
 ## What's New
 
+- **Modern PyTorch Support**: Upgraded to PyTorch 2.1+ with full CUDA 11.x/12.x compatibility
+- **Standard nn.Module Design**: MegaFS now inherits from `torch.nn.Module` for standard PyTorch workflows
+- **Centralized Device Management**: Automatic device detection and management across all components
 - **Gradient Compatibility**: Full support for gradient-based experiments and adversarial attacks
 - **PyTorch Dataset Integration**: Built-in Dataset/DataLoader support with train/val/test splits
 - **YAML Configuration**: Easy experiment configuration management with YAML files
@@ -34,12 +37,19 @@ A modular implementation of "One Shot Face Swapping on Megapixels (CVPR 2021)" w
 ## Requirements
 
 - Python 3.7+
-- PyTorch 1.7+ (CUDA support recommended)
+- PyTorch 2.1+ (CUDA support recommended for modern GPUs: A100, 30xx series, etc.)
 - OpenCV (`opencv-python`)
 - NumPy
 - tqdm (optional, for progress bars)
 - PyYAML (for YAML configuration support)
 - pytest (for testing, optional)
+
+### CUDA Compatibility
+
+The project now uses PyTorch 2.1.0, which is compatible with modern CUDA versions (11.x and 12.x), making it suitable for:
+- NVIDIA A100 GPUs
+- RTX 30xx/40xx series
+- Other modern CUDA-enabled GPUs
 
 ## Installation
 

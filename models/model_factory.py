@@ -15,14 +15,28 @@ from .weight_loaders import FTMWeightLoader, InjectionWeightLoader, LCRWeightLoa
 class ModelFactory:
     """Factory class for creating and loading MegaFS model components"""
     
-    def __init__(self, checkpoint_dir: str = "weights"):
+    def __init__(self, checkpoint_dir: str = "weights", device: str = "cuda"):
         self.checkpoint_dir = checkpoint_dir
+        self.device = device
         self.weight_loaders = {
             "ftm": FTMWeightLoader(checkpoint_dir),
             "injection": InjectionWeightLoader(checkpoint_dir),
             "lcr": LCRWeightLoader(checkpoint_dir),
             "stylegan2": StyleGAN2WeightLoader(checkpoint_dir)
         }
+        # Weight loading method mapping for better maintainability
+        self.load_methods = {
+            "ftm": "load_ftm_weights",
+            "injection": "load_injection_weights",
+            "lcr": "load_lcr_weights"
+        }
+    
+    def _load_weights_for_type(self, loader, swap_type: str) -> Optional[Dict]:
+        """Load weights for a given swap type using the appropriate method"""
+        method_name = self.load_methods.get(swap_type)
+        if method_name and hasattr(loader, method_name):
+            return getattr(loader, method_name)()
+        return None
     
     def create_encoder(self, swap_type: str) -> HieRFE:
         """Create and load encoder model"""
@@ -30,18 +44,15 @@ class ModelFactory:
         
         # Encoder configuration
         latent_split = [4, 6, 8]
-        encoder = HieRFE(resnet50(False), num_latents=latent_split, depth=50).cuda()
+        encoder = HieRFE(resnet50(False), num_latents=latent_split, depth=50)
         
-        # Load weights
+        # Move to device
+        device = torch.device(self.device)
+        encoder = encoder.to(device)
+        
+        # Load weights using centralized method
         loader = self.weight_loaders[swap_type]
-        if swap_type == "ftm":
-            weights = loader.load_ftm_weights()
-        elif swap_type == "injection":
-            weights = loader.load_injection_weights()
-        elif swap_type == "lcr":
-            weights = loader.load_lcr_weights()
-        else:
-            weights = None
+        weights = self._load_weights_for_type(loader, swap_type)
         
         if weights and "e" in weights:
             # Use strict=True like original
@@ -67,18 +78,15 @@ class ModelFactory:
             swap_indice=swap_indice,
             num_latents=num_latents,
             typ=swap_type
-        ).cuda()
+        )
         
-        # Load weights
+        # Move to device
+        device = torch.device(self.device)
+        swapper = swapper.to(device)
+        
+        # Load weights using centralized method
         loader = self.weight_loaders[swap_type]
-        if swap_type == "ftm":
-            weights = loader.load_ftm_weights()
-        elif swap_type == "injection":
-            weights = loader.load_injection_weights()
-        elif swap_type == "lcr":
-            weights = loader.load_lcr_weights()
-        else:
-            weights = None
+        weights = self._load_weights_for_type(loader, swap_type)
         
         if weights and "s" in weights:
             state_dict = weights["s"]
@@ -107,7 +115,11 @@ class ModelFactory:
         
         # Generator configuration
         size = 1024
-        generator = Generator(size, 512, 8, channel_multiplier=2).cuda()
+        generator = Generator(size, 512, 8, channel_multiplier=2)
+        
+        # Move to device
+        device = torch.device(self.device)
+        generator = generator.to(device)
         
         # Load weights
         loader = self.weight_loaders["stylegan2"]

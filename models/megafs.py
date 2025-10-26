@@ -57,8 +57,8 @@ from utils.data_utils import DataMapManager
 from utils.debug_utils import DebugLogger, PerformanceProfiler, check_system_requirements
 
 
-class MegaFS(object):
-    """MegaFS class for face swapping - Modular version"""
+class MegaFS(nn.Module):
+    """MegaFS class for face swapping - Modular version with nn.Module support"""
     
     def __init__(self, 
                  swap_type: str = "ftm",
@@ -68,7 +68,11 @@ class MegaFS(object):
                  data_map: Optional[Dict[int, Dict[str, Any]]] = None,
                  config: Optional[Config] = None,
                  debug: bool = True,
-                 enable_grads: bool = False):
+                 enable_grads: bool = False,
+                 device: str = "cuda"):
+        
+        # Initialize nn.Module
+        super(MegaFS, self).__init__()
         
         # Initialize configuration
         if config is None:
@@ -80,6 +84,10 @@ class MegaFS(object):
             )
         else:
             self.config = config
+        
+        # Store device
+        self.device_str = device
+        self.device = torch.device(device)
         
         # Initialize utilities
         self.debug_logger = DebugLogger(enabled=debug)
@@ -104,35 +112,42 @@ class MegaFS(object):
             raise RuntimeError("Required weight files are missing or invalid")
         
         # Initialize model factory and create models
-        self.model_factory = ModelFactory(self.config.paths.checkpoint_dir)
+        self.model_factory = ModelFactory(self.config.paths.checkpoint_dir, device=device)
         self.models = self.model_factory.create_all_models(self.config.swap.swap_type)
         
-        # Assign models for backward compatibility
+        # Register models as submodules using nn.Module's register_module
         self.encoder = self.models["encoder"]
         self.swapper = self.models["swapper"]
         self.generator = self.models["generator"]
+        
+        # Register as submodules
+        self.add_module('encoder', self.encoder)
+        self.add_module('swapper', self.swapper)
+        self.add_module('generator', self.generator)
         
         # Set model mode based on gradient configuration
         self.set_gradient_mode(self.enable_grads)
         
         # Initialize smooth mask
         from .soft_erosion import SoftErosion
-        self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7).cuda()
+        self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7)
+        self.smooth_mask.to(self.device)
         self.smooth_mask.eval()
+        self.add_module('smooth_mask', self.smooth_mask)
         
         if self.enable_grads:
             self.smooth_mask.train()
         
         try:
-            dummy_input = torch.randn(1, 3, 256, 256).cuda()
+            dummy_input = torch.randn(1, 3, 256, 256).to(self.device)
             with torch.no_grad():
                 _ = self.encoder(dummy_input)
         except Exception as e:
             pass
         
         try:
-            dummy_struct = torch.randn(1, 512, 4, 4).cuda()
-            dummy_lats = torch.randn(1, 18, 512).cuda()
+            dummy_struct = torch.randn(1, 512, 4, 4).to(self.device)
+            dummy_lats = torch.randn(1, 18, 512).to(self.device)
             with torch.no_grad():
                 _ = self.generator(dummy_struct, [dummy_lats, None], randomize_noise=False)
         except Exception as e:
@@ -141,21 +156,30 @@ class MegaFS(object):
     def set_gradient_mode(self, enabled: bool):
         """Toggle between eval (inference) and train (gradients) mode"""
         self.enable_grads = enabled
-        mode = 'train' if enabled else 'eval'
-        
-        # Set mode for all models
-        for model in [self.encoder, self.swapper, self.generator]:
-            getattr(model, mode)()
-        
-        # Set smooth mask mode
         if enabled:
-            self.smooth_mask.train()
+            self.train()
         else:
-            self.smooth_mask.eval()
+            self.eval()
         
         if self.debug_logger.enabled:
             status = "ENABLED" if enabled else "DISABLED"
             self.debug_logger.log(f"Gradient computation {status}", "INFO")
+    
+    def train(self, mode: bool = True):
+        """Override train() to set model to training mode"""
+        super().train(mode)
+        # Set gradient mode based on training mode
+        self.enable_grads = mode
+        # All submodules will be set to train/eval by super().train()
+        return self
+    
+    def eval(self):
+        """Override eval() to set model to evaluation mode"""
+        super().eval()
+        # Disable gradients in eval mode
+        self.enable_grads = False
+        # All submodules will be set to eval by super().eval()
+        return self
     
     def forward(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
@@ -169,8 +193,8 @@ class MegaFS(object):
             Swapped face tensor [B, 3, 1024, 1024]
         """
         # Ensure on correct device
-        source = source.cuda()
-        target = target.cuda()
+        source = source.to(self.device)
+        target = target.to(self.device)
         
         # Concatenate for encoding
         ts = torch.cat([target, source], dim=0)
@@ -283,7 +307,7 @@ class MegaFS(object):
         
         with context:
             try:
-                ts = torch.cat([target, source], dim=0).cuda()
+                ts = torch.cat([target, source], dim=0).to(self.device)
                 lats, struct = self.encoder(ts)
 
                 idd_lats = lats[1:]
@@ -311,7 +335,7 @@ class MegaFS(object):
     def refine(self, swapped_tensor: torch.Tensor) -> np.ndarray:
         with torch.no_grad():
             try:
-                lats, struct = self.encoder(swapped_tensor.cuda())
+                lats, struct = self.encoder(swapped_tensor.to(self.device))
                 fake_refine, _ = self.generator(struct, [lats, None], randomize_noise=False)
                 
             except Exception as e:
@@ -336,7 +360,7 @@ class MegaFS(object):
         )
 
         # Convert mask to tensor and process like original
-        mask_tensor = torch.from_numpy(target_mask.copy().transpose((2, 0, 1))).float().mul_(1/255.0).cuda()
+        mask_tensor = torch.from_numpy(target_mask.copy().transpose((2, 0, 1))).float().mul_(1/255.0).to(self.device)
         face_mask_tensor = mask_tensor[0] + mask_tensor[1]  # face + mouth channels like original
 
         # Apply smooth mask

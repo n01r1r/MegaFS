@@ -209,14 +209,21 @@ def initialize_model(config, data_map, swap_type='ftm', enable_grads=False):
         # Update swap type in config
         config.swap.swap_type = swap_type
         
+        # Determine device
+        import torch
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"Using device: {device}")
+        
         handler = MegaFS_module(
             config=config,
             data_map=data_map,
             debug=True,
-            enable_grads=enable_grads
+            enable_grads=enable_grads,
+            device=device
         )
         
         print(f"✓ {swap_type.upper()}-MegaFS model initialized")
+        print(f"✓ Device: {device}")
         if enable_grads:
             print("✓ Gradient computation enabled")
         
