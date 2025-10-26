@@ -68,12 +68,25 @@ class InjectionResBlock(nn.Module):
             self.att_path2.append(InjectionBlock())
 
     def forward(self, idd: torch.Tensor, att: torch.Tensor) -> torch.Tensor:
-        for i in range(self.num_blocks):
-            att_bias = att * 1
-            att = self.att_path1[i]((idd, att))
-            att = self.att_path2[i]((idd, att))
-            att = att + att_bias
-        return self.act(att.unsqueeze(1))
+        # idd and att are [B, num_latents, 512], need to process each latent separately
+        B, num_latents, dim = idd.shape
+        output_latents = []
+        
+        for latent_idx in range(num_latents):
+            idd_latent = idd[:, latent_idx, :]  # [B, 512]
+            att_latent = att[:, latent_idx, :]  # [B, 512]
+            
+            for i in range(self.num_blocks):
+                att_bias = att_latent * 1
+                att_latent = self.att_path1[i]((idd_latent, att_latent))
+                att_latent = self.att_path2[i]((idd_latent, att_latent))
+                att_latent = att_latent + att_bias
+            
+            # Apply activation
+            output_latents.append(self.act(att_latent))
+        
+        # Stack to get [B, num_latents, 512]
+        return torch.stack(output_latents, dim=1)
 
 
 def LCR(idd: torch.Tensor, att: torch.Tensor, swap_indice: int = 4) -> torch.Tensor:
@@ -88,7 +101,7 @@ class FaceTransferModule(nn.Module):
         self.type = typ
         if self.type == "ftm":
             self.swap_indice = swap_indice
-            self.num_latents = num_latents - swap_indice
+            self.num_latents = num_latents # - swap_indice
             self.blocks = nn.ModuleList()
             for i in range(self.num_latents):
                 self.blocks.append(TransferCell(num_blocks))
@@ -98,55 +111,54 @@ class FaceTransferModule(nn.Module):
         elif self.type == "injection":
             self.swap_indice = swap_indice
             self.num_latents = num_latents - swap_indice
-            self.blocks = nn.ModuleList()
-            for i in range(self.num_latents):
-                self.blocks.append(InjectionResBlock(num_blocks))
+            # InjectionResBlock processes all latents internally
+            self.blocks = nn.ModuleList([InjectionResBlock(num_blocks)])
         
         elif self.type == "lcr":
             self.swap_indice = swap_indice
         
         else:
             raise NotImplementedError()
-        
+    def split(self, tensor):
+        """Splits the latent tensor into low-frequency and high-frequency parts."""
+        # Splits [B, 18, 512] into [B, 4, 512] and [B, 14, 512]
+        low_freq = tensor[:, :self.swap_indice, :]
+        high_freq = tensor[:, self.swap_indice:, :]
+        return low_freq, high_freq
+
     def forward(self, idd, att):
-        if self.type == "ftm":
-            att_low = att[:, :self.swap_indice]
-            idd_high = idd[:, self.swap_indice:]
-            att_high = att[:, self.swap_indice:]
+        # Split latents into low-frequency (unswapped) and high-frequency (swapped)
+        idd_low, idd_high = self.split(idd)
+        att_low, att_high = self.split(att)
 
-            N = idd.size(0)
-            idds = []
-            atts = []
+        # 'ftm' iterates and processes a few latents one by one (as 2D tensors)
+        if self.type == 'ftm':
+            latents_list = []
             for i in range(self.num_latents):
-                new_idd, new_att = self.blocks[i](idd_high[:, i], att_high[:, i])
-                idds.append(new_idd)
-                atts.append(new_att)
-            idds = torch.cat(idds, 1)  # [N, num_latents, 512]
-            atts = torch.cat(atts, 1)  # [N, num_latents, 512]
-            scale = torch.sigmoid(self.weight).expand(N, -1, -1)
-            latents = scale * idds + (1-scale) * atts
-
-            return torch.cat([att_low, latents], 1)
+                new_latent = self.blocks[i](idd_high[:, i], att_high[:, i])
+                latents_list.append(new_latent)
             
-        elif self.type == "injection":
-            att_low = att[:, :self.swap_indice]
-            idd_high = idd[:, self.swap_indice:]
-            att_high = att[:, self.swap_indice:]
+            # Stack the 2D tensors into a 3D tensor
+            latents = torch.stack(latents_list, 1)
 
-            N = idd.size(0)
-            latents = []
-            for i in range(self.num_latents):
-                # InjectionBlock expects a tuple-like (idd, att)
-                new_latent = self.blocks[i]((idd_high[:, i], att_high[:, i]))
-                latents.append(new_latent.unsqueeze(1))
-            latents = torch.cat(latents, 1)
-            return torch.cat([att_low, latents], 1)
+        # 'injection' processes all high-frequency latents at once (as a 3D tensor)
+        elif self.type == 'injection':
+            # self.blocks[0] expects the full 3D tensor [B, 14, 512]
+            # and returns a 3D tensor [B, 14, 512]
+            latents = self.blocks[0](idd_high, att_high)
+            # No stack is needed
         
-        elif self.type == "lcr":
-            return LCR(idd, att, swap_indice=self.swap_indice)
-        
+        # 'lcr' just does latent code replacement (copy att high-freq as-is)
+        elif self.type == 'lcr':
+            latents = att_high  # For LCR, just use att high-freq latents as-is
+
         else:
-            raise NotImplementedError()
+            raise ValueError(f"Unknown swap type: {self.type}")
+
+        # Concatenate the unswapped low-freq latents with the new high-freq latents
+        # att_low is [B, 4, 512]
+        # latents is [B, 14, 512] (for injection) or [B, 3, 512] (for ftm)
+        return torch.cat([att_low, latents], 1)
 
 
 class LCRBlock(nn.Module):

@@ -356,8 +356,8 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Save path
-    save_path = os.path.join(args.output_dir, f'swap_{src_id}_to_{tgt_id}.jpg')
+    # Save path with method name
+    save_path = os.path.join(args.output_dir, f'swap_{src_id}_to_{tgt_id}_{args.swap_type}.jpg')
     
     # Run face swap
     print("\n" + "=" * 60)
