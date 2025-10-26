@@ -57,22 +57,54 @@ The project now uses PyTorch 2.1.0, which is compatible with modern CUDA version
 
 ## Installation
 
+### Prerequisites
+
+- NVIDIA GPU (RTX 30xx/40xx or A100 recommended) with CUDA 11.x or 12.x drivers
+- Python 3.10+
+- Git
+
+### Setup Steps
+
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/n01r1r/MegaFS.git
    cd MegaFS
    ```
 
-2. **Install dependencies**:
+2. **Create a virtual environment (highly recommended)**:
    ```bash
-   pip install -r requirements.txt
+   # Create virtual environment
+   python -m venv venv
+   
+   # Activate it
+   # Windows:
+   .\venv\Scripts\activate
+   # macOS/Linux:
+   source venv/bin/activate
+   ```
+
+3. **Install dependencies**:
+   
+   For CUDA 12.x:
+   ```bash
+   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
    ```
    
-   Note: This will install PyTorch 2.1.0 with CUDA support. For CPU-only or custom CUDA versions, follow the [official PyTorch installation guide](https://pytorch.org/get-started/locally/).
-
-3. **Verify installation**:
+   For CUDA 11.x:
    ```bash
-   python -c "import torch; print(torch.__version__); print(f'CUDA available: {torch.cuda.is_available()}')"
+   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
+   ```
+   
+   For CPU-only installation:
+   ```bash
+   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+   ```
+   
+   **Why `--extra-index-url`?** This ensures pip pulls PyTorch packages from the official PyTorch server, which resolves dependency conflicts with NumPy and other packages.
+
+4. **Verify installation**:
+   ```bash
+   python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
    ```
 
 ## Project Structure
