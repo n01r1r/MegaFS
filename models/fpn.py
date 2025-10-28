@@ -38,7 +38,7 @@ class FPN(nn.Module):
             c1, c2, c3 = self.backbone(x)
             p4 = None
         p3 = self.output3(c3)                                                   # N, 512, 8, 8
-        p2 = self.output2(c2) + F.upsample(p3, scale_factor=2, mode='bilinear', align_corners=True) # N, 512, 16, 16
-        p1 = self.output1(c1) + F.upsample(p2, scale_factor=2, mode='bilinear', align_corners=True) # N, 512, 32, 32
+        p2 = self.output2(c2) + F.interpolate(p3, scale_factor=2, mode='bilinear', align_corners=True) # N, 512, 16, 16
+        p1 = self.output1(c1) + F.interpolate(p2, scale_factor=2, mode='bilinear', align_corners=True) # N, 512, 32, 32
 
         return p4, p3, p2, p1

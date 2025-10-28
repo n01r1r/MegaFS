@@ -70,7 +70,8 @@ class ModelFactory:
         
         # Swapper configuration
         num_blocks = 3 if swap_type == "ftm" else 1
-        num_latents = 18
+        # For 'ftm', the swapper processes only the high-frequency latents (18 - 4 = 14)
+        num_latents = 14 if swap_type == "ftm" else 18
         swap_indice = 4
         
         swapper = FaceTransferModule(

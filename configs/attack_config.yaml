@@ -1,0 +1,55 @@
+# Attack Configuration for HieRFE Dual-Target Adversarial Attack
+# Self-supervised mask generation + dual-objective PGD
+
+attack:
+  type: "dual_target_pgd"
+  
+  # PGD hyperparameters
+  epsilon: 8.0      # L_inf constraint (per pixel perturbation)
+  alpha: 1.0        # Step size for gradient descent
+  num_iter: 100000     # Number of PGD iterations
+  
+  # Loss weights (dual objectives)
+  lambda_1: 1.0     # L_ID weight (identity destruction)
+  lambda_2: 1.0     # L_SEM weight (semantic collapse)
+
+mask_generation:
+  method: "fpn_attention"  # Use FPN feature maps for mask generation
+  
+  # Which FPN layers to use
+  feature_layers: ["f8", "f16"]  # Multi-scale fusion
+  # Options: "f8", "f16", "f32"
+  
+  # Masking parameters
+  threshold: 0.3     # Threshold for hard masking (0-1)
+  mask_type: "hard" # "hard" or "soft"
+  
+  # Post-processing
+  post_process: false  # Use morphological operations
+  # Note: Can use SoftErosion if needed
+
+# Model configuration
+model:
+  swap_type: "ftm"  # "ftm", "injection", or "lcr"
+  enable_grads: true  # Required for gradient computation
+
+# Experimental settings
+experiment:
+  verbose: true
+  save_results: true
+  output_dir: "experiments/results/dual_target_attack"
+  
+  # Batch processing
+  batch_size: 1      # Process one image at a time
+  max_samples: 10    # Maximum number of samples to process
+
+# Image paths
+paths:
+  dataset_root: "./dataset/CelebAMask-HQ"
+  img_root: "./dataset/CelebAMask-HQ/CelebA-HQ-img"
+  mask_root: "./dataset/CelebAMask-HQ/CelebAMask-HQ-mask-anno"
+  checkpoint_dir: "./weights"
+
+# Device
+device: "cuda"  # "cuda" or "cpu"
+

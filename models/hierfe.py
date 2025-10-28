@@ -23,7 +23,19 @@ class StyleMapping(nn.Module):
         self.convs = nn.Sequential(*convs)
     
     def forward(self, x):
-        x = self.convs(x).squeeze(2).squeeze(2).unsqueeze(1)
+        if not self.training:
+            x = self.convs(x)
+        else:
+            for module in self.convs:
+                if isinstance(module, nn.BatchNorm2d):
+                    if x.shape[2] > 1 and x.shape[3] > 1:
+                        x = module(x)
+                    else:
+                        # Skip BN on 1x1 to avoid train-time errors
+                        continue
+                else:
+                    x = module(x)
+        x = x.squeeze(2).squeeze(2).unsqueeze(1)
         return x
 
 

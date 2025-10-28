@@ -102,13 +102,16 @@ Thumbs.db
 # Output directories
 outputs/
 results/
+experiments/results/
+experiments/**/results/**
+experiments/**/image_*/
+experiments/**/swap_*.jpg
+experiments/**/mask_*.jpg
+experiments/**/loss_curves.jpg
+experiments/**/comparison.jpg
 
-# Image files (comment out if you need to track specific images)
-*.jpg
-*.png
-# But keep Jupyter notebooks and data_map.json
-!*.ipynb
-!data_map.json
+# Image files: do not ignore globally to allow code/demo images when needed
+# Remove previous global ignores; instead ignore experiment outputs only (above)
 
 # IDE specific files
 .vscode/
@@ -123,3 +126,9 @@ desktop.ini
 # Project specific
 *.pdf
 # Uncomment if you want to track PDFs
+
+# Cursor-generated or assistant-generated docs
+IMPLEMENTATION_SUMMARY.md
+HOW_TO_TEST.md
+CHANGES.md
+experiments/ATTACK_FLOW.md

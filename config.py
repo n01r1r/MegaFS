@@ -57,7 +57,8 @@ class Config:
                  dataset_root: str = "",
                  img_root: str = "",
                  mask_root: str = "",
-                 checkpoint_dir: str = "weights"):
+                 checkpoint_dir: str = "weights",
+                 validate_paths: bool = True):
         
         self.swap = SwapConfig(swap_type=swap_type)
         self.paths = PathConfig(
@@ -67,6 +68,7 @@ class Config:
             checkpoint_dir=checkpoint_dir
         )
         self.model = ModelConfig()
+        self._validate_paths = validate_paths
         
         # Validate configuration
         self._validate()
@@ -76,7 +78,7 @@ class Config:
         if not self.swap.is_valid_swap_type:
             raise ValueError(f"Invalid swap_type: {self.swap.swap_type}. Must be one of: ftm, injection, lcr")
         
-        if not os.path.exists(self.paths.checkpoint_dir):
+        if self._validate_paths and not os.path.exists(self.paths.checkpoint_dir):
             print(f"WARNING: Checkpoint directory not found: {self.paths.checkpoint_dir}")
     
     def get_weight_filename(self) -> str:
@@ -99,7 +101,7 @@ class Config:
         print(f"  StyleGAN2 File: {self.get_stylegan2_filename()}")
     
     @classmethod
-    def from_yaml(cls, yaml_path: str) -> 'Config':
+    def from_yaml(cls, yaml_path: str, *, validate_paths: bool = True) -> 'Config':
         """Load configuration from YAML file"""
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
@@ -109,7 +111,8 @@ class Config:
             dataset_root=config_dict.get('dataset_root', ''),
             img_root=config_dict.get('img_root', ''),
             mask_root=config_dict.get('mask_root', ''),
-            checkpoint_dir=config_dict.get('checkpoint_dir', 'weights')
+            checkpoint_dir=config_dict.get('checkpoint_dir', 'weights'),
+            validate_paths=validate_paths
         )
     
     def to_yaml(self, yaml_path: str):
@@ -138,20 +141,23 @@ DEFAULT_CONFIGS = {
         dataset_root="/content/CelebAMask-HQ",
         img_root="/content/CelebAMask-HQ/CelebA-HQ-img",
         mask_root="/content/CelebAMask-HQ/CelebAMask-HQ-mask-anno",
-        checkpoint_dir="/content/drive/MyDrive/Datasets/weights"
+        checkpoint_dir="/content/drive/MyDrive/Datasets/weights",
+        validate_paths=False
     ),
     "local": Config(
         swap_type="ftm",
         dataset_root="./CelebAMask-HQ",
         img_root="./CelebAMask-HQ/CelebA-HQ-img",
         mask_root="./CelebAMask-HQ/CelebAMask-HQ-mask-anno",
-        checkpoint_dir="./weights"
+        checkpoint_dir="./weights",
+        validate_paths=False
     ),
     "evaluation": Config(
         swap_type="ftm",
         dataset_root="/content/CelebAMask-HQ",
         img_root="/content/CelebAMask-HQ/CelebA-HQ-img",
         mask_root="/content/CelebAMask-HQ/CelebAMask-HQ-mask-anno",
-        checkpoint_dir="/content/drive/MyDrive/Datasets/weights"
+        checkpoint_dir="/content/drive/MyDrive/Datasets/weights",
+        validate_paths=False
     )
 }
