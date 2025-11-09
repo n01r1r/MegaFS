@@ -74,6 +74,45 @@ class ImageProcessor:
             tensor = (tensor - 0.5) / 0.5
         
         return tensor
+
+    @staticmethod
+    def apply_preprocessing(image_rgb: np.ndarray, mode: str = 'none') -> np.ndarray:
+        """Apply optional illumination normalization / contrast enhancement.
+        Modes: 'none' | 'homo' | 'homo_clahe'. Returns RGB image.
+        """
+        if image_rgb is None or mode == 'none':
+            return image_rgb
+        try:
+            # Convert to YCrCb
+            ycrcb = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2YCrCb)
+            y, cr, cb = cv2.split(ycrcb)
+            # Homomorphic filtering on Y channel
+            y_float = y.astype(np.float32) + 1.0
+            y_log = np.log(y_float)
+            dft = np.fft.fft2(y_log)
+            dft_shift = np.fft.fftshift(dft)
+            h, w = y.shape
+            cy, cx = h // 2, w // 2
+            sigma = max(h, w) * 0.1
+            Y, X = np.ogrid[:h, :w]
+            gauss = np.exp(-((Y - cy)**2 + (X - cx)**2) / (2 * sigma * sigma))
+            hp = 1.0 - gauss
+            dft_hp = dft_shift * hp
+            ishift = np.fft.ifftshift(dft_hp)
+            y_log_hp = np.fft.ifft2(ishift).real
+            y_homo = np.exp(y_log_hp)
+            # Normalize back
+            y_homo = y_homo - y_homo.min()
+            y_homo = y_homo / (y_homo.max() + 1e-6)
+            y_homo = (y_homo * 255.0).clip(0, 255).astype(np.uint8)
+            if mode == 'homo_clahe':
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                y_homo = clahe.apply(y_homo)
+            ycrcb_out = cv2.merge([y_homo, cr, cb])
+            out = cv2.cvtColor(ycrcb_out, cv2.COLOR_YCrCb2RGB)
+            return out
+        except Exception:
+            return image_rgb
     
     @staticmethod
     def preprocess_for_model_tensor(tensor: torch.Tensor, normalize: bool = True) -> torch.Tensor:
@@ -173,6 +212,47 @@ class ImageProcessor:
         except Exception as e:
             print(f"ERROR: Error saving image {save_path}: {e}")
             return False
+
+    @staticmethod
+    def detect_face_bbox(image: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """Detect a face bbox using OpenCV Haar cascade. Returns (x,y,w,h) or None.
+        Expects RGB image.
+        """
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
+            if len(faces) == 0:
+                return None
+            # Return largest face
+            x, y, w, h = max(faces, key=lambda r: r[2] * r[3])
+            return (x, y, w, h)
+        except Exception:
+            return None
+
+    @staticmethod
+    def make_ellipse_mask(image: np.ndarray, bbox: Optional[Tuple[int, int, int, int]], edge_blur_ks: int = 0) -> np.ndarray:
+        """Create a soft elliptical face mask from bbox on an RGB image.
+        Returns float mask in [0,1] shape [H,W,3]. If bbox is None, returns central ellipse.
+        """
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        if bbox is None:
+            cx, cy = w // 2, h // 2
+            ax, ay = int(w * 0.25), int(h * 0.35)
+        else:
+            x, y, bw, bh = bbox
+            cx, cy = x + bw // 2, y + bh // 2
+            ax, ay = int(bw * 0.6), int(bh * 0.85)
+        # Draw filled ellipse
+        cv2.ellipse(mask, (cx, cy), (max(1, ax), max(1, ay)), 0, 0, 360, 255, -1)
+        # Optional blur
+        if edge_blur_ks and edge_blur_ks > 1 and edge_blur_ks % 2 == 1:
+            mask = cv2.GaussianBlur(mask, (edge_blur_ks, edge_blur_ks), 0)
+        mask_f = (mask.astype(np.float32) / 255.0)
+        # Expand to 3-channel
+        mask_rgb = np.stack([mask_f, mask_f, mask_f], axis=2)
+        return mask_rgb
 
 
 class ImageLoader:

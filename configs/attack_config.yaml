@@ -5,12 +5,12 @@ attack:
   type: "dual_target_pgd"
   
   # PGD hyperparameters
-  epsilon: 8.0      # L_inf constraint (per pixel perturbation)
-  alpha: 1.0        # Step size for gradient descent
-  num_iter: 100000     # Number of PGD iterations
+  epsilon: 16.0     # L_inf constraint (per pixel perturbation) [increased from 8.0]
+  alpha: 2.0        # Step size for gradient descent [increased from 1.0]
+  num_iter: 50000   # Number of PGD iterations [reduced from 100K to 50K for testing]
   
   # Loss weights (dual objectives)
-  lambda_1: 1.0     # L_ID weight (identity destruction)
+  lambda_1: 4.0     # L_ID weight (identity destruction) [increased from 1.0]
   lambda_2: 1.0     # L_SEM weight (semantic collapse)
 
 mask_generation:
