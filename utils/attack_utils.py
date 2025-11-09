@@ -1,6 +1,6 @@
 """
 Adversarial attack utilities for MegaFS using HieRFE's dual-target strategy
-Based on self-supervised mask generation from FPN feature maps
+Based on BlazeFace face detection for mask generation
 """
 
 import torch
@@ -12,133 +12,53 @@ from pathlib import Path
 
 from .image_utils import ImageProcessor
 from models.hierfe import HieRFE
+from models.blazeface import get_blazeface_model, detect_faces
 
 
-def generate_mask_from_fpn(
-    identity_extractor: HieRFE,
-    image_tensor_normalized: torch.Tensor,
-    output_size: Tuple[int, int] = (256, 256),
-    feature_layers: List[str] = ['f4', 'f8', 'f16'],
-    threshold: Any = 0.2,  # LOWER default for better mask coverage
-    mask_type: str = 'hard',
+def generate_mask_from_blazeface(
+    image_np: np.ndarray,
+    blazeface_model,
     device: str = 'cuda',
-    temperature: float = 0.15,
-    blur_ks: int = 0,
-    blur_sigma: float = 0.0
+    edge_blur_ks: int = 0
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Generate face mask M1 using HieRFE's FPN feature maps (XAI-inspired approach).
+    Generate face mask M1 using BlazeFace face detection.
     
     Args:
-        identity_extractor: HieRFE model
-        image_tensor_normalized: Input tensor in range [-1, 1]
-        output_size: Target mask size (height, width)
-        feature_layers: Which FPN layers to use ('f8', 'f16', 'f32')
-        threshold: Threshold for hard masking (0-1)
-        mask_type: 'hard' or 'soft'
+        image_np: Input image as numpy array [H, W, 3] in RGB format, range [0, 255]
+        blazeface_model: BlazeFace model instance
         device: Device for computation
+        edge_blur_ks: Kernel size for edge blur (0 = no blur)
         
     Returns:
-        M1 (face mask), M2 (background mask), both detached
+        M1 (face mask), M2 (background mask), both detached tensors [1, 3, H, W]
     """
-    identity_extractor.eval()
+    H, W = image_np.shape[:2]
     
-    with torch.no_grad():
-        # Extract FPN features
-        f4, f8, f16, f32 = identity_extractor.fpn(image_tensor_normalized)
-        
-        # Compute attention maps for each layer
-        attention_maps = []
-        
-        if 'f4' in feature_layers:
-            # f4: higher spatial resolution, strong on contours
-            attn_f4 = f4.pow(2).mean(dim=1, keepdim=True)
-            attn_f4 = F.interpolate(attn_f4, size=output_size, mode='bilinear', align_corners=False)
-            # normalize per-map
-            attn_f4 = (attn_f4 - attn_f4.min()) / (attn_f4.max() - attn_f4.min() + 1e-6)
-            attention_maps.append(attn_f4)
-
-        if 'f8' in feature_layers:
-            # f8: [B, 512, 8, 8]
-            attn_f8 = f8.pow(2).mean(dim=1, keepdim=True)
-            attn_f8 = F.interpolate(attn_f8, size=output_size, mode='bilinear', align_corners=False)
-            attn_f8 = (attn_f8 - attn_f8.min()) / (attn_f8.max() - attn_f8.min() + 1e-6)
-            attention_maps.append(attn_f8)
-        
-        if 'f16' in feature_layers:
-            # f16: [B, 512, 16, 16]
-            attn_f16 = f16.pow(2).mean(dim=1, keepdim=True)
-            attn_f16 = F.interpolate(attn_f16, size=output_size, mode='bilinear', align_corners=False)
-            attn_f16 = (attn_f16 - attn_f16.min()) / (attn_f16.max() - attn_f16.min() + 1e-6)
-            attention_maps.append(attn_f16)
-        
-        if 'f32' in feature_layers:
-            # f32: [B, 512, 32, 32]
-            attn_f32 = f32.pow(2).mean(dim=1, keepdim=True)
-            attn_f32 = F.interpolate(attn_f32, size=output_size, mode='bilinear', align_corners=False)
-            attn_f32 = (attn_f32 - attn_f32.min()) / (attn_f32.max() - attn_f32.min() + 1e-6)
-            attention_maps.append(attn_f32)
-        
-        # Multi-scale fusion via element-wise product (AND gate)
-        if len(attention_maps) > 1:
-            attention_map = attention_maps[0]
-            for k in range(1, len(attention_maps)):
-                attention_map = (attention_map * attention_maps[k]).clamp(0, 1)
-        else:
-            attention_map = attention_maps[0]
-        
-        # Min-max normalization
-        min_val = attention_map.min()
-        max_val = attention_map.max()
-        attention_map = (attention_map - min_val) / (max_val - min_val + 1e-6)
-        
-        # Adaptive threshold (if requested)
-        thr_val: float
-        if isinstance(threshold, str) and threshold == 'auto':
-            # Otsu on CPU
-            attn_np = attention_map.detach().cpu().numpy().astype(np.float32)
-            attn_u8 = (attn_np * 255.0).astype(np.uint8)
-            import cv2
-            _, thr = cv2.threshold(attn_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            thr_val = float(thr) / 255.0
-        else:
-            thr_val = float(threshold)
-
-        # Soft mask via temperature-controlled sigmoid around threshold
-        M1_soft = torch.sigmoid((attention_map - thr_val) / max(1e-6, temperature))
-        
-        # Expand to 3 channels if needed [B, 1, H, W] -> [B, 3, H, W]
-        if M1_soft.shape[1] == 1:
-            M1_soft = M1_soft.repeat(1, 3, 1, 1)
-
-    # Optional blur (approximate with average pooling)
-    if blur_ks and blur_ks > 1:
-        k = int(blur_ks)
-        pad = k // 2
-        M1_soft = F.avg_pool2d(M1_soft, kernel_size=k, stride=1, padding=pad)
-
-    # Confidence weighting: multiply by attention magnitude
-    with torch.no_grad():
-        if attention_map.shape[1] == 1:
-            attn3 = attention_map.repeat(1, 3, 1, 1)
-        else:
-            attn3 = attention_map
-    M1_soft = (M1_soft * attn3).clamp(0, 1)
-
-    # Derive background and renormalize so M1+M2≈1
-    M1 = M1_soft.detach()
-    M2 = (1.0 - M1).detach()
-    S = (M1 + M2).clamp(min=1e-6)
-    M1 = (M1 / S).detach()
-    M2 = (M2 / S).detach()
+    # Detect face using BlazeFace
+    bboxes = detect_faces(blazeface_model, image_np, anchors=None, threshold=0.5)
     
-    mask_face_mean = float(M1.sum().item())/M1.numel()
-    if mask_face_mean < 0.15:
-        print(f"[MASK WARN] FPN mask face area very small: {mask_face_mean:.3f}. Try threshold=0.15 or change fusion.")
+    if len(bboxes) == 0:
+        # No face detected, use center ellipse as fallback
+        print("[MASK WARN] No face detected by BlazeFace, using center ellipse")
+        bbox = None
     else:
-        print(f"[MASK DEBUG] FPN mask face area: {mask_face_mean:.3f}")
+        # Use largest detected face
+        bbox = bboxes[0]  # (x, y, w, h)
+        print(f"[MASK DEBUG] BlazeFace detected face: bbox={bbox}")
     
-    return M1, M2
+    # Create ellipse mask from bounding box
+    m1_np = ImageProcessor.make_ellipse_mask(image_np, bbox, edge_blur_ks=edge_blur_ks)
+    
+    # Convert to tensor [1, 3, H, W]
+    m1_t = torch.from_numpy(m1_np.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
+    M1 = m1_t
+    M2 = (1.0 - M1).clamp(0, 1)
+    
+    mask_face_mean = float(M1.sum().item()) / M1.numel()
+    print(f"[MASK DEBUG] BlazeFace mask face area: {mask_face_mean:.3f}")
+    
+    return M1.detach(), M2.detach()
 
 
 def visualize_mask(mask: torch.Tensor, save_path: Optional[str] = None) -> np.ndarray:
@@ -174,7 +94,7 @@ def visualize_mask(mask: torch.Tensor, save_path: Optional[str] = None) -> np.nd
 
 class DualTargetPGDAttack:
     """
-    Dual-target PGD attack on HieRFE with self-supervised mask generation.
+    Dual-target PGD attack on HieRFE with BlazeFace mask generation.
     
     Implements:
     - L_ID: Identity destruction on face region (A1)
@@ -189,19 +109,14 @@ class DualTargetPGDAttack:
         num_iter: int = 100,
         lambda_1: float = 1.0,
         lambda_2: float = 1.0,
-        feature_layers: List[str] = ['f4', 'f8', 'f16'],
-        mask_threshold: Any = 0.3,
-        mask_type: str = 'hard',
         device: str = 'cuda',
         verbose: bool = True,
         sem_variant: str = 'mse_f4',  # 'mse_f4' (default), 'l1_f4', 'self_collapse', 'self_collapse_mid', 'contrastive_bg'
         preproc: str = 'none',
-        mask_mode: str = 'fpn',  # 'fpn' | 'ellipse' | 'anno' (future)
         mask_blur_ks: int = 0,
-        mask_blur_sigma: float = 0.0,
-        mask_temperature: float = 0.15,
         loss_schedule: bool = False,
-        clip_grad: float = 0.0
+        clip_grad: float = 0.0,
+        checkpoint_dir: str = "weights"
     ):
         self.identity_extractor = identity_extractor
         self.epsilon = epsilon
@@ -209,19 +124,18 @@ class DualTargetPGDAttack:
         self.num_iter = num_iter
         self.lambda_1 = lambda_1
         self.lambda_2 = lambda_2
-        self.feature_layers = feature_layers
-        self.mask_threshold = mask_threshold
-        self.mask_type = mask_type
         self.device = device
         self.verbose = verbose
         self.sem_variant = sem_variant
         self.preproc_mode = preproc
-        self.mask_mode = mask_mode
         self.mask_blur_ks = int(mask_blur_ks)
-        self.mask_blur_sigma = float(mask_blur_sigma)
-        self.mask_temperature = float(mask_temperature)
         self.loss_schedule = bool(loss_schedule)
         self.clip_grad = float(clip_grad)
+        
+        # Initialize BlazeFace model
+        self.blazeface_model = get_blazeface_model(device=device, checkpoint_dir=checkpoint_dir)
+        if self.blazeface_model is None:
+            raise RuntimeError("Failed to load BlazeFace model. Please ensure blazeface.pth is in the weights directory.")
         
         # History for logging
         self.loss_history = {
@@ -235,21 +149,14 @@ class DualTargetPGDAttack:
     
     def generate_masks(
         self,
-        image_tensor_normalized: torch.Tensor,
-        output_size: Tuple[int, int]
+        image_np: np.ndarray
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Generate masks using FPN features with soft/blur options."""
-        M1, M2 = generate_mask_from_fpn(
-            self.identity_extractor,
-            image_tensor_normalized,
-            output_size=output_size,
-            feature_layers=self.feature_layers,
-            threshold=self.mask_threshold,
-            mask_type=self.mask_type,
+        """Generate masks using BlazeFace face detection."""
+        M1, M2 = generate_mask_from_blazeface(
+            image_np,
+            self.blazeface_model,
             device=self.device,
-            temperature=self.mask_temperature,
-            blur_ks=self.mask_blur_ks,
-            blur_sigma=self.mask_blur_sigma
+            edge_blur_ks=self.mask_blur_ks
         )
         return M1, M2
     
@@ -271,20 +178,9 @@ class DualTargetPGDAttack:
             raise ValueError(f"Failed to load image: {image_path}")
         
         image_tensor = torch.from_numpy(image_np.transpose(2, 0, 1)).float().unsqueeze(0).to(self.device)
-        image_tensor_normalized = ImageProcessor.preprocess_for_model_tensor(image_tensor)
         
-        # 2. Generate masks
-        H, W = image_tensor.shape[2:]
-        if self.mask_mode == 'ellipse':
-            # Build ellipse mask on preprocessed RGB
-            bbox = ImageProcessor.detect_face_bbox(image_np)
-            m1_np = ImageProcessor.make_ellipse_mask(image_np, bbox, edge_blur_ks=self.mask_blur_ks)
-            # Convert to tensor shape [1,3,H,W]
-            m1_t = torch.from_numpy(m1_np.transpose(2, 0, 1)).float().unsqueeze(0).to(self.device)
-            M1 = m1_t
-            M2 = (1.0 - M1).clamp(0, 1)
-        else:
-            M1, M2 = self.generate_masks(image_tensor_normalized, output_size=(H, W))
+        # 2. Generate masks using BlazeFace
+        M1, M2 = self.generate_masks(image_np)
         
         if self.verbose:
             print(f"Generated masks - M1: {M1.sum()/M1.numel():.2%} face, M2: {M2.sum()/M2.numel():.2%} background")

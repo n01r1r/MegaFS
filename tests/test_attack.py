@@ -8,37 +8,42 @@ import sys
 import unittest
 import torch
 import torch.nn as nn
+import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.attack_utils import generate_mask_from_fpn
+from utils.attack_utils import generate_mask_from_blazeface
 from models.hierfe import HieRFE
 from models.resnet import resnet50
 from models.megafs import MegaFS
+from models.blazeface import get_blazeface_model
 
 
 class TestMaskGeneration(unittest.TestCase):
-    """Test FPN-based mask generation."""
+    """Test BlazeFace-based mask generation."""
     
     def setUp(self):
         """Setup test fixtures."""
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.backbone = resnet50(False)
-        self.hierfe = HieRFE(self.backbone, num_latents=[4, 6, 8], depth=50)
-        self.hierfe = self.hierfe.to(self.device)
-        self.hierfe.eval()
         
-        # Create dummy input
-        self.dummy_input = torch.randn(1, 3, 256, 256).to(self.device)
+        # Create dummy image (numpy array)
+        self.dummy_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+        
+        # Try to load BlazeFace model
+        try:
+            self.blazeface_model = get_blazeface_model(device=self.device, checkpoint_dir='./weights')
+        except Exception:
+            self.blazeface_model = None
+            self.skipTest("BlazeFace model not available, skipping mask generation tests")
         
     def test_mask_shape(self):
         """Test that generated masks have correct shape."""
-        M1, M2 = generate_mask_from_fpn(
-            self.hierfe,
-            self.dummy_input,
-            output_size=(256, 256),
-            feature_layers=['f8'],
-            threshold=0.3,
+        if self.blazeface_model is None:
+            self.skipTest("BlazeFace model not available")
+            
+        M1, M2 = generate_mask_from_blazeface(
+            self.dummy_image,
+            self.blazeface_model,
             device=self.device
         )
         
@@ -52,36 +57,24 @@ class TestMaskGeneration(unittest.TestCase):
         self.assertTrue((M2 >= 0).all())
         self.assertTrue((M2 <= 1).all())
         
-        # Check complementary
+        # Check complementary (approximately)
         mask_diff = torch.abs(M1 + M2 - torch.ones_like(M1))
         self.assertTrue((mask_diff < 1e-4).all())
     
     def test_mask_detached(self):
         """Test that masks are detached from computation graph."""
-        M1, M2 = generate_mask_from_fpn(
-            self.hierfe,
-            self.dummy_input,
-            output_size=(256, 256),
-            feature_layers=['f8'],
+        if self.blazeface_model is None:
+            self.skipTest("BlazeFace model not available")
+            
+        M1, M2 = generate_mask_from_blazeface(
+            self.dummy_image,
+            self.blazeface_model,
             device=self.device
         )
         
         # Check requires_grad is False
         self.assertFalse(M1.requires_grad)
         self.assertFalse(M2.requires_grad)
-    
-    def test_multiple_feature_layers(self):
-        """Test mask generation with multiple FPN layers."""
-        M1, M2 = generate_mask_from_fpn(
-            self.hierfe,
-            self.dummy_input,
-            output_size=(256, 256),
-            feature_layers=['f8', 'f16', 'f32'],
-            device=self.device
-        )
-        
-        self.assertEqual(M1.shape, (1, 3, 256, 256))
-        self.assertEqual(M2.shape, (1, 3, 256, 256))
 
 
 class TestGradientFlow(unittest.TestCase):
@@ -197,19 +190,22 @@ class TestAttackClass(unittest.TestCase):
     def test_mask_generation_method(self):
         """Test that mask generation method works."""
         from utils.attack_utils import DualTargetPGDAttack
+        import numpy as np
         
-        attack = DualTargetPGDAttack(
-            identity_extractor=self.hierfe,
-            device=self.device,
-            verbose=False
-        )
+        try:
+            attack = DualTargetPGDAttack(
+                identity_extractor=self.hierfe,
+                device=self.device,
+                verbose=False,
+                checkpoint_dir='./weights'
+            )
+        except RuntimeError:
+            self.skipTest("BlazeFace model not available, skipping mask generation test")
         
-        dummy_input = torch.randn(1, 3, 256, 256).to(self.device)
-        # Normalize to [-1, 1]
-        dummy_input_norm = (dummy_input - dummy_input.min()) / (dummy_input.max() - dummy_input.min())
-        dummy_input_norm = dummy_input_norm * 2 - 1
+        # Create dummy image (numpy array)
+        dummy_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
         
-        M1, M2 = attack.generate_masks(dummy_input_norm, output_size=(256, 256))
+        M1, M2 = attack.generate_masks(dummy_image)
         
         self.assertEqual(M1.shape, (1, 3, 256, 256))
         self.assertEqual(M2.shape, (1, 3, 256, 256))

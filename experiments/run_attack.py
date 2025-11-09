@@ -68,7 +68,6 @@ def make_exp_output_dir(base_dir: str, cfg: Dict[str, Any], image_id: int) -> st
     exp_name = (
         f"exp_l1_{cfg['attack']['lambda_1']}_"
         f"l2_{cfg['attack']['lambda_2']}_"
-        f"t_{cfg['mask_generation']['threshold']}_"
         f"e_{cfg['attack']['epsilon']}"
     )
     odir = os.path.join(base_dir, exp_name, str(image_id))
@@ -80,7 +79,6 @@ def make_exp_dir(base_dir: str, cfg: Dict[str, Any]) -> str:
     exp_name = (
         f"exp_l1_{cfg['attack']['lambda_1']}_"
         f"l2_{cfg['attack']['lambda_2']}_"
-        f"t_{cfg['mask_generation']['threshold']}_"
         f"e_{cfg['attack']['epsilon']}"
     )
     edir = os.path.join(base_dir, exp_name)
@@ -96,7 +94,6 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
         # Apply job-specific overrides
         cfg['attack']['lambda_1'] = float(job_args['lambda_1'])
         cfg['attack']['lambda_2'] = float(job_args['lambda_2'])
-        cfg['mask_generation']['threshold'] = job_args['threshold']
         cfg['attack']['epsilon'] = float(job_args['epsilon'])
         cfg['attack']['num_iter'] = int(job_args['num_iter'])
 
@@ -111,14 +108,12 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
                 'success': False,
                 'lambda_1': job_args['lambda_1'],
                 'lambda_2': job_args['lambda_2'],
-                'threshold': job_args['threshold'],
                 'epsilon': job_args['epsilon'],
                 'num_iter': job_args['num_iter']
             }
         res.update({
             'lambda_1': job_args['lambda_1'],
             'lambda_2': job_args['lambda_2'],
-            'threshold': job_args['threshold'],
             'epsilon': job_args['epsilon'],
             'num_iter': job_args['num_iter']
         })
@@ -134,12 +129,11 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
 def _sweep_job_pair(job_tuple: tuple) -> Dict[str, Any]:
     """Top-level function for ProcessPoolExecutor pair sweep execution (pickle-safe)."""
     try:
-        src_id, tgt_id, l1, l2, thr, eps, nit, config_json, base_output_dir = job_tuple
+        src_id, tgt_id, l1, l2, eps, nit, config_json, base_output_dir = job_tuple
         # Reconstruct config
         cfg = json.loads(config_json)
         cfg['attack']['lambda_1'] = float(l1)
         cfg['attack']['lambda_2'] = float(l2)
-        cfg['mask_generation']['threshold'] = thr
         cfg['attack']['epsilon'] = float(eps)
         cfg['attack']['num_iter'] = int(nit)
         # force full-compare behavior
@@ -181,19 +175,14 @@ def run_single_attack(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
-        feature_layers=config['mask_generation']['feature_layers'],
-        mask_threshold=config['mask_generation']['threshold'],
-        mask_type=config['mask_generation']['mask_type'],
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'mse_f4'),
         preproc=config.get('preprocessing', {}).get('mode', 'none'),
-        mask_mode=config.get('mask_generation', {}).get('mode', 'fpn'),
-        mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', config.get('mask_generation', {}).get('blur_ks', 0)),
-        mask_blur_sigma=config.get('mask_generation', {}).get('blur_sigma', 0.0),
-        mask_temperature=config.get('mask_generation', {}).get('temperature', 0.15),
+        mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
-        clip_grad=config.get('attack', {}).get('clip_grad', 0.0)
+        clip_grad=config.get('attack', {}).get('clip_grad', 0.0),
+        checkpoint_dir=config['paths']['checkpoint_dir']
     )
     
     # Execute attack
@@ -292,7 +281,6 @@ def run_single_attack(
                     'params': {
                         'lambda_1': config['attack']['lambda_1'],
                         'lambda_2': config['attack']['lambda_2'],
-                        'threshold': config['mask_generation']['threshold'],
                         'epsilon':   config['attack']['epsilon'],
                         'num_iter':  config['attack']['num_iter']
                     },
@@ -392,18 +380,14 @@ def run_pair_attack(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
-        feature_layers=config['mask_generation']['feature_layers'],
-        mask_threshold=config['mask_generation']['threshold'],
-        mask_type=config['mask_generation']['mask_type'],
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'mse_f4'),
         preproc=config.get('preprocessing', {}).get('mode', 'none'),
-        mask_blur_ks=config.get('mask_generation', {}).get('blur_ks', 0),
-        mask_blur_sigma=config.get('mask_generation', {}).get('blur_sigma', 0.0),
-        mask_temperature=config.get('mask_generation', {}).get('temperature', 0.15),
+        mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
-        clip_grad=config.get('attack', {}).get('clip_grad', 0.0)
+        clip_grad=config.get('attack', {}).get('clip_grad', 0.0),
+        checkpoint_dir=config['paths']['checkpoint_dir']
     )
 
     # Load clean images
@@ -466,7 +450,6 @@ def run_pair_attack(
         'params': {
             'lambda_1': config['attack']['lambda_1'],
             'lambda_2': config['attack']['lambda_2'],
-            'threshold': config['mask_generation']['threshold'],
             'epsilon':   config['attack']['epsilon'],
             'num_iter':  config['attack']['num_iter']
         },
@@ -520,7 +503,6 @@ def main():
     parser.add_argument('--num_iter', type=int, default=None)
     parser.add_argument('--lambda_1', type=float, default=None)
     parser.add_argument('--lambda_2', type=float, default=None)
-    parser.add_argument('--threshold', type=str, default=None, help='float or "auto"')
     parser.add_argument('--epsilon', type=float, default=None)
     # Sweep mode (Python-only)
     parser.add_argument('--sweep', action='store_true', help='Enable sweep mode (runs multiple attacks)')
@@ -528,19 +510,14 @@ def main():
     parser.add_argument('--num_iter_list', type=int, nargs='*', default=None)
     parser.add_argument('--lambda_1_list', type=float, nargs='*', default=None)
     parser.add_argument('--lambda_2_list', type=float, nargs='*', default=None)
-    parser.add_argument('--threshold_list', type=str, nargs='*', default=None, help='list of floats and/or "auto"')
     # Preprocessing and mask options
     parser.add_argument('--preproc', type=str, default=None, choices=['none','homo','homo_clahe'])
-    parser.add_argument('--mask-blur-ks', type=int, default=None)
-    parser.add_argument('--mask-blur-sigma', type=float, default=None)
-    parser.add_argument('--mask-temperature', type=float, default=None)
+    parser.add_argument('--mask-edge-blur', type=int, default=None)
     # SEM variant and schedules
     parser.add_argument('--sem-variant', type=str, default=None,
                         choices=['mse_f4','l1_f4','self_collapse','self_collapse_mid','contrastive_bg'])
     parser.add_argument('--loss-schedule', action='store_true')
     parser.add_argument('--clip-grad', type=float, default=None)
-    parser.add_argument('--mask-mode', type=str, default=None, choices=['fpn','ellipse'])
-    parser.add_argument('--mask-edge-blur', type=int, default=None)
     parser.add_argument('--epsilon_list', type=float, nargs='*', default=None)
     parser.add_argument('--parallel', type=int, default=1, help='Max concurrent workers for sweep')
     parser.add_argument('--attack-source', action='store_true', help='Also attack the source image')
@@ -576,27 +553,14 @@ def main():
         config['attack']['lambda_1'] = args.lambda_1
     if args.lambda_2 is not None:
         config['attack']['lambda_2'] = args.lambda_2
-    if args.threshold is not None:
-        config['mask_generation']['threshold'] = args.threshold
     if args.epsilon is not None:
         config['attack']['epsilon'] = args.epsilon
     # New options
-    if args.mask_mode is not None:
-        config.setdefault('mask_generation', {})
-        config['mask_generation']['mode'] = args.mask_mode
     if args.mask_edge_blur is not None:
         config.setdefault('mask_generation', {})
         config['mask_generation']['edge_blur'] = int(args.mask_edge_blur)
     if args.preproc is not None:
         config['preprocessing'] = {'mode': args.preproc}
-    if args.mask_blur_ks is not None or args.mask_blur_sigma is not None or args.mask_temperature is not None:
-        config.setdefault('mask_generation', {})
-        if args.mask_blur_ks is not None:
-            config['mask_generation']['blur_ks'] = int(args.mask_blur_ks)
-        if args.mask_blur_sigma is not None:
-            config['mask_generation']['blur_sigma'] = float(args.mask_blur_sigma)
-        if args.mask_temperature is not None:
-            config['mask_generation']['temperature'] = float(args.mask_temperature)
     if args.sem_variant is not None:
         config.setdefault('attack', {})
         config['attack']['sem_variant'] = args.sem_variant
@@ -625,7 +589,6 @@ def main():
             # Build parameter lists
             l1_list = args.lambda_1_list if args.lambda_1_list else [config['attack']['lambda_1']]
             l2_list = args.lambda_2_list if args.lambda_2_list else [config['attack']['lambda_2']]
-            t_list  = args.threshold_list if args.threshold_list else [config['mask_generation']['threshold']]
             e_list  = args.epsilon_list if args.epsilon_list else [config['attack']['epsilon']]
             it_list = args.num_iter_list if args.num_iter_list else [config['attack']['num_iter']]
 
@@ -633,10 +596,9 @@ def main():
             for (src_id, tgt_id) in pairs:
                 for l1 in l1_list:
                     for l2 in l2_list:
-                        for thr in t_list:
-                            for eps in e_list:
-                                for nit in it_list:
-                                    combos.append((src_id, tgt_id, l1, l2, thr, eps, nit))
+                        for eps in e_list:
+                            for nit in it_list:
+                                combos.append((src_id, tgt_id, l1, l2, eps, nit))
 
             print(f"Scheduling {len(combos)} pair-sweep jobs (parallel={args.parallel})...")
             base_output_dir = config['experiment']['output_dir']
@@ -644,8 +606,8 @@ def main():
             results = []
 
             # Extend combos with config_json and base_output_dir for pickle-safe job runner
-            extended_combos = [(src_id, tgt_id, l1, l2, thr, eps, nit, config_json, base_output_dir) 
-                               for (src_id, tgt_id, l1, l2, thr, eps, nit) in combos]
+            extended_combos = [(src_id, tgt_id, l1, l2, eps, nit, config_json, base_output_dir) 
+                               for (src_id, tgt_id, l1, l2, eps, nit) in combos]
 
             from concurrent.futures import ProcessPoolExecutor, as_completed
             with ProcessPoolExecutor(max_workers=max(1, args.parallel)) as executor:
@@ -673,12 +635,11 @@ def main():
         # Build parameter lists (fallback to current config if list not provided)
         l1_list = args.lambda_1_list if args.lambda_1_list else [config['attack']['lambda_1']]
         l2_list = args.lambda_2_list if args.lambda_2_list else [config['attack']['lambda_2']]
-        t_list = args.threshold_list if args.threshold_list else [config['mask_generation']['threshold']]
         e_list = args.epsilon_list if args.epsilon_list else [config['attack']['epsilon']]
         it_list = args.num_iter_list if args.num_iter_list else [config['attack']['num_iter']]
 
         # Prepare jobs
-        combos = list(itertools.product(image_ids, l1_list, l2_list, t_list, e_list, it_list))
+        combos = list(itertools.product(image_ids, l1_list, l2_list, e_list, it_list))
         print(f"Scheduling {len(combos)} jobs (parallel={args.parallel})...")
 
         base_output_dir = output_dir
@@ -687,14 +648,13 @@ def main():
 
         with ProcessPoolExecutor(max_workers=max(1, args.parallel)) as executor:
             futures = []
-            for (jid, l1, l2, th, eps, nit) in combos:
+            for (jid, l1, l2, eps, nit) in combos:
                 job_args = {
                     'config_json': config_json,
                     'base_output_dir': base_output_dir,
                     'image_id': int(jid),
                     'lambda_1': float(l1),
                     'lambda_2': float(l2),
-                    'threshold': th,
                     'epsilon': float(eps),
                     'num_iter': int(nit)
                 }

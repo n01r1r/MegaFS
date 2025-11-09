@@ -4,11 +4,11 @@ This directory contains scripts for running dual-target adversarial attacks on H
 
 ## Overview
 
-The implementation uses **self-supervised mask generation** from HieRFE's FPN feature maps, eliminating the need for external segmentation models.
+The implementation uses **BlazeFace face detection** (official hollance/BlazeFace-PyTorch implementation) for mask generation, providing fast and accurate face/background separation with proper anchor-based detection.
 
 ## Key Features
 
-- **Self-supervised masks**: Extract face masks directly from FPN features (`f8`, `f16`, `f32`)
+- **BlazeFace-based masks**: Use BlazeFace face detection to generate face masks from bounding boxes
 - **Dual-target optimization**:
   - L_ID: Destroy identity in face region (A1)
   - L_SEM: Inject face structure into background (A2)
@@ -56,7 +56,7 @@ Edit `configs/attack_config.yaml` to adjust:
 
 - **PGD parameters**: `epsilon`, `alpha`, `num_iter`
 - **Loss weights**: `lambda_1` (identity destruction), `lambda_2` (semantic collapse)
-- **Mask generation**: `feature_layers`, `threshold`, `mask_type`
+- **Mask generation**: `edge_blur` (for ellipse mask smoothing)
 - **Paths**: Dataset, weights, output directories
 
 ## Output Files
@@ -80,14 +80,15 @@ results/
 
 ### Mask Generation
 
-1. Extract FPN features (`f8`, `f16`, `f32`) from HieRFE
-2. Compute channel-wise attention: `feature.pow(2).mean(dim=1)`
-3. Interpolate to input size
-4. Apply threshold to create binary mask
+1. Use BlazeFace (official implementation) to detect face bounding box with anchor-based decoding
+2. Apply weighted NMS (Non-Maximum Suppression) to filter overlapping detections
+3. Create ellipse mask from bounding box using `ImageProcessor.make_ellipse_mask()`
+4. Apply optional edge blur for smooth mask boundaries
+5. Generate background mask as complement of face mask
 
 ### Attack Loop
 
-1. Generate masks from clean image (detached)
+1. Generate masks from clean image using BlazeFace (detached)
 2. Initialize perturbation `delta = 0`
 3. For each iteration:
    - Compute `adv_image = original + delta`
@@ -101,6 +102,7 @@ results/
 - MegaFS is initialized with `enable_grads=True` to allow gradient computation
 - HieRFE inherits from `nn.Module`, so autograd works automatically
 - Masks are detached to prevent gradient flow during PGD
+- BlazeFace model is in eval mode and does not require gradients
 
 ## Tests
 
@@ -130,5 +132,5 @@ See `requirements.txt` for all dependencies. Key requirements:
 Based on the dual-target adversarial attack strategy for face swapping systems:
 - **L_ID**: Identity destruction via latent space manipulation
 - **L_SEM**: Semantic collapse through structural feature injection
-- **Self-supervised masking**: FPN attention maps for region separation
+- **BlazeFace masking**: BlazeFace face detection for region separation
 

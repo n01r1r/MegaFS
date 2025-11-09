@@ -160,11 +160,9 @@ def evaluate_image_pair(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
-        feature_layers=config['mask_generation']['feature_layers'],
-        mask_threshold=config['mask_generation']['threshold'],
-        mask_type=config['mask_generation']['mask_type'],
         device=config['device'],
-        verbose=False
+        verbose=False,
+        checkpoint_dir=config['paths']['checkpoint_dir']
     )
     
     adversarial = attack.attack(image_path, output_dir=None)
