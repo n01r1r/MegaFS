@@ -381,7 +381,8 @@ def detect_faces(
     image: np.ndarray,
     anchors: Optional[np.ndarray] = None,
     threshold: float = 0.5,
-    nms_threshold: float = 0.3
+    nms_threshold: float = 0.3,
+    padding_ratio: float = 1.5
 ) -> List[Tuple[int, int, int, int]]:
     """
     Detect faces in an image using BlazeFace with proper anchor-based decoding.
@@ -392,6 +393,8 @@ def detect_faces(
         anchors: Anchor boxes (optional, uses model.anchors if not provided)
         threshold: Detection confidence threshold (overrides model.min_score_thresh)
         nms_threshold: Non-maximum suppression threshold
+        padding_ratio: Ratio for padding image before resizing (default 1.5). 
+                       Larger values help detect faces that fill most of the image.
         
     Returns:
         List of bounding boxes as (x, y, w, h) tuples in image coordinates
@@ -403,8 +406,18 @@ def detect_faces(
     device = model._device()
     h, w = image.shape[:2]
     
-    # Resize image to 128x128 (BlazeFace input size)
-    image_resized = cv2.resize(image, (128, 128))
+    # Add padding to help detect large faces
+    # Pad image symmetrically so face becomes relatively smaller
+    padded_size = int(max(h, w) * padding_ratio)
+    pad_h = (padded_size - h) // 2
+    pad_w = (padded_size - w) // 2
+    
+    # Create padded image with black borders
+    padded_image = np.zeros((padded_size, padded_size, 3), dtype=image.dtype)
+    padded_image[pad_h:pad_h+h, pad_w:pad_w+w] = image
+    
+    # Resize padded image to 128x128 (BlazeFace input size)
+    image_resized = cv2.resize(padded_image, (128, 128))
     
     # Convert to tensor [1, 3, 128, 128]
     image_tensor = torch.from_numpy(image_resized.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
@@ -425,27 +438,37 @@ def detect_faces(
         faces = model._weighted_non_max_suppression(detections[i])
         filtered_detections.append(faces)
     
-    # Convert to (x, y, w, h) format and scale to original image size
+    # Convert to (x, y, w, h) format and scale back to original image coordinates
     bboxes = []
     if len(filtered_detections) > 0 and len(filtered_detections[0]) > 0:
         for face in filtered_detections[0]:
             # Face detection format: [ymin, xmin, ymax, xmax, ...keypoints..., confidence]
             ymin, xmin, ymax, xmax = face[0].item(), face[1].item(), face[2].item(), face[3].item()
             
-            # Scale from 128x128 to original image size
-            xmin = int(xmin * w / 128.0)
-            ymin = int(ymin * h / 128.0)
-            xmax = int(xmax * w / 128.0)
-            ymax = int(ymax * h / 128.0)
+            # Scale from 128x128 (padded image) to padded image size
+            xmin_padded = xmin * padded_size / 128.0
+            ymin_padded = ymin * padded_size / 128.0
+            xmax_padded = xmax * padded_size / 128.0
+            ymax_padded = ymax * padded_size / 128.0
             
-            # Convert to (x, y, w, h) format
-            bbox_x = max(0, xmin)
-            bbox_y = max(0, ymin)
-            bbox_w = min(w, xmax) - bbox_x
-            bbox_h = min(h, ymax) - bbox_y
+            # Remove padding offset to get coordinates in original image
+            xmin = int(xmin_padded - pad_w)
+            ymin = int(ymin_padded - pad_h)
+            xmax = int(xmax_padded - pad_w)
+            ymax = int(ymax_padded - pad_h)
+            
+            # Convert to (x, y, w, h) format and clip to image bounds
+            bbox_x = max(0, min(w, xmin))
+            bbox_y = max(0, min(h, ymin))
+            bbox_w = max(0, min(w, xmax) - bbox_x)
+            bbox_h = max(0, min(h, ymax) - bbox_y)
             
             if bbox_w > 0 and bbox_h > 0:
                 bboxes.append((bbox_x, bbox_y, bbox_w, bbox_h))
+    
+    # If no detections found and padding_ratio is default, try with larger padding
+    if len(bboxes) == 0 and padding_ratio == 1.5:
+        return detect_faces(model, image, anchors, threshold, nms_threshold, padding_ratio=2.0)
     
     return bboxes
 

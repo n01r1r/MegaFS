@@ -14,10 +14,31 @@ attack:
   lambda_2: 1.0     # L_SEM weight (semantic collapse)
 
 mask_generation:
-  method: "blazeface"  # Use BlazeFace face detection for mask generation
+  method: "blazeface_padded"  # Detector method: "blazeface_padded", "blazeface", or "haar"
+  strict_detection: true  # DEFAULT: true - attack STOPS if detection fails/doesn't meet criteria
+  fallback_method: "haar"  # Fallback detector if primary fails (only used if strict_detection=false)
   
   # Edge blur for ellipse mask
   edge_blur: 0  # Kernel size for edge blur (0 = no blur)
+  
+  # BlazeFace detector parameters
+  blazeface:
+    padding_ratio: 1.5  # Padding ratio for large face detection (default 1.5)
+    threshold: 0.5      # Detection confidence threshold
+    nms_threshold: 0.3  # Non-maximum suppression threshold
+  
+  # Haar-Cascade detector parameters
+  haar:
+    scale_factor: 1.1    # Scale factor for image pyramid
+    min_neighbors: 3    # Minimum neighbors for detection
+    min_size: 50        # Minimum face size (width, height) in pixels
+  
+  # Detection validation parameters
+  validation:
+    min_bbox_area_ratio: 0.01  # Minimum face area as ratio of image (1% of image)
+    max_bbox_area_ratio: 0.95   # Maximum face area (95% of image)
+    min_bbox_size: 20           # Minimum bbox width/height in pixels
+    # If detection fails validation, attack will STOP (if strict_detection=true)
 
 # Model configuration
 model:

@@ -13,39 +13,105 @@ from pathlib import Path
 from .image_utils import ImageProcessor
 from models.hierfe import HieRFE
 from models.blazeface import get_blazeface_model, detect_faces
+from .face_detectors import (
+    FaceDetector, get_face_detector, validate_detection,
+    BlazeFaceDetector, HaarCascadeDetector
+)
 
 
-def generate_mask_from_blazeface(
+class FaceDetectionError(Exception):
+    """Exception raised when face detection fails or doesn't meet validation criteria"""
+    
+    def __init__(self, message: str, reason: str = "", metrics: Optional[Dict[str, Any]] = None):
+        """
+        Initialize FaceDetectionError.
+        
+        Args:
+            message: Error message
+            reason: Detailed reason for failure
+            metrics: Validation metrics dictionary
+        """
+        super().__init__(message)
+        self.message = message
+        self.reason = reason
+        self.metrics = metrics or {}
+    
+    def __str__(self):
+        msg = self.message
+        if self.reason:
+            msg += f"\nReason: {self.reason}"
+        if self.metrics:
+            msg += f"\nMetrics: {self.metrics}"
+        return msg
+
+
+def generate_mask_from_detector(
     image_np: np.ndarray,
-    blazeface_model,
+    detector: FaceDetector,
     device: str = 'cuda',
-    edge_blur_ks: int = 0
+    edge_blur_ks: int = 0,
+    strict_detection: bool = True,
+    min_bbox_area_ratio: float = 0.01,
+    max_bbox_area_ratio: float = 0.95,
+    min_bbox_size: int = 20,
+    fallback_detector: Optional[FaceDetector] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Generate face mask M1 using BlazeFace face detection.
+    Generate face mask M1 using face detector with validation.
     
     Args:
         image_np: Input image as numpy array [H, W, 3] in RGB format, range [0, 255]
-        blazeface_model: BlazeFace model instance
+        detector: FaceDetector instance
         device: Device for computation
         edge_blur_ks: Kernel size for edge blur (0 = no blur)
+        strict_detection: If True, raise FaceDetectionError on failure; if False, use fallback ellipse
+        min_bbox_area_ratio: Minimum face area as ratio of image
+        max_bbox_area_ratio: Maximum face area as ratio of image
+        min_bbox_size: Minimum bbox width/height in pixels
+        fallback_detector: Optional fallback detector to try if primary fails
         
     Returns:
         M1 (face mask), M2 (background mask), both detached tensors [1, 3, H, W]
+        
+    Raises:
+        FaceDetectionError: If detection fails and strict_detection=True
     """
     H, W = image_np.shape[:2]
     
-    # Detect face using BlazeFace
-    bboxes = detect_faces(blazeface_model, image_np, anchors=None, threshold=0.5)
+    # Try primary detector
+    bboxes = detector.detect(image_np)
     
-    if len(bboxes) == 0:
-        # No face detected, use center ellipse as fallback
-        print("[MASK WARN] No face detected by BlazeFace, using center ellipse")
-        bbox = None
-    else:
-        # Use largest detected face
+    # If no detection, try fallback detector
+    if len(bboxes) == 0 and fallback_detector is not None:
+        print(f"[MASK INFO] Primary detector failed, trying fallback detector...")
+        bboxes = fallback_detector.detect(image_np)
+    
+    # Select largest face if multiple detected
+    if len(bboxes) > 0:
+        # Sort by area (w * h) and take largest
+        bboxes = sorted(bboxes, key=lambda b: b[2] * b[3], reverse=True)
         bbox = bboxes[0]  # (x, y, w, h)
-        print(f"[MASK DEBUG] BlazeFace detected face: bbox={bbox}")
+        print(f"[MASK DEBUG] Detected face: bbox={bbox}")
+    else:
+        bbox = None
+    
+    # Validate detection
+    is_valid, reason, metrics = validate_detection(
+        bbox,
+        (H, W),
+        min_bbox_area_ratio=min_bbox_area_ratio,
+        max_bbox_area_ratio=max_bbox_area_ratio,
+        min_bbox_size=min_bbox_size
+    )
+    
+    # Handle validation failure
+    if not is_valid:
+        error_msg = f"Face detection failed validation: {reason}"
+        if strict_detection:
+            raise FaceDetectionError(error_msg, reason=reason, metrics=metrics)
+        else:
+            print(f"[MASK WARN] {error_msg}, using center ellipse as fallback")
+            bbox = None
     
     # Create ellipse mask from bounding box
     m1_np = ImageProcessor.make_ellipse_mask(image_np, bbox, edge_blur_ks=edge_blur_ks)
@@ -56,9 +122,42 @@ def generate_mask_from_blazeface(
     M2 = (1.0 - M1).clamp(0, 1)
     
     mask_face_mean = float(M1.sum().item()) / M1.numel()
-    print(f"[MASK DEBUG] BlazeFace mask face area: {mask_face_mean:.3f}")
+    print(f"[MASK DEBUG] Mask face area: {mask_face_mean:.3f}")
+    if metrics:
+        print(f"[MASK DEBUG] Detection metrics: {metrics}")
     
     return M1.detach(), M2.detach()
+
+
+def generate_mask_from_blazeface(
+    image_np: np.ndarray,
+    blazeface_model,
+    device: str = 'cuda',
+    edge_blur_ks: int = 0
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate face mask M1 using BlazeFace face detection (backward compatibility).
+    
+    Args:
+        image_np: Input image as numpy array [H, W, 3] in RGB format, range [0, 255]
+        blazeface_model: BlazeFace model instance
+        device: Device for computation
+        edge_blur_ks: Kernel size for edge blur (0 = no blur)
+        
+    Returns:
+        M1 (face mask), M2 (background mask), both detached tensors [1, 3, H, W]
+    """
+    # Create detector wrapper for backward compatibility
+    detector = BlazeFaceDetector(model=blazeface_model, device=device)
+    
+    # Use non-strict mode for backward compatibility
+    return generate_mask_from_detector(
+        image_np,
+        detector,
+        device=device,
+        edge_blur_ks=edge_blur_ks,
+        strict_detection=False  # Backward compatible: use fallback ellipse
+    )
 
 
 def visualize_mask(mask: torch.Tensor, save_path: Optional[str] = None) -> np.ndarray:
@@ -116,7 +215,14 @@ class DualTargetPGDAttack:
         mask_blur_ks: int = 0,
         loss_schedule: bool = False,
         clip_grad: float = 0.0,
-        checkpoint_dir: str = "weights"
+        checkpoint_dir: str = "weights",
+        detector_method: str = "blazeface_padded",
+        strict_detection: bool = True,
+        fallback_detector_method: Optional[str] = None,
+        min_bbox_area_ratio: float = 0.01,
+        max_bbox_area_ratio: float = 0.95,
+        min_bbox_size: int = 20,
+        detector_kwargs: Optional[Dict[str, Any]] = None
     ):
         self.identity_extractor = identity_extractor
         self.epsilon = epsilon
@@ -131,11 +237,30 @@ class DualTargetPGDAttack:
         self.mask_blur_ks = int(mask_blur_ks)
         self.loss_schedule = bool(loss_schedule)
         self.clip_grad = float(clip_grad)
+        self.strict_detection = strict_detection
+        self.min_bbox_area_ratio = min_bbox_area_ratio
+        self.max_bbox_area_ratio = max_bbox_area_ratio
+        self.min_bbox_size = min_bbox_size
         
-        # Initialize BlazeFace model
-        self.blazeface_model = get_blazeface_model(device=device, checkpoint_dir=checkpoint_dir)
-        if self.blazeface_model is None:
-            raise RuntimeError("Failed to load BlazeFace model. Please ensure blazeface.pth is in the weights directory.")
+        # Initialize face detector
+        detector_kwargs = detector_kwargs or {}
+        self.detector = get_face_detector(
+            method=detector_method,
+            device=device,
+            checkpoint_dir=checkpoint_dir,
+            **detector_kwargs
+        )
+        
+        # Initialize fallback detector if specified
+        self.fallback_detector = None
+        if fallback_detector_method:
+            fallback_kwargs = detector_kwargs.copy()
+            self.fallback_detector = get_face_detector(
+                method=fallback_detector_method,
+                device=device,
+                checkpoint_dir=checkpoint_dir,
+                **fallback_kwargs
+            )
         
         # History for logging
         self.loss_history = {
@@ -151,12 +276,22 @@ class DualTargetPGDAttack:
         self,
         image_np: np.ndarray
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Generate masks using BlazeFace face detection."""
-        M1, M2 = generate_mask_from_blazeface(
+        """
+        Generate masks using configured face detector with validation.
+        
+        Raises:
+            FaceDetectionError: If detection fails and strict_detection=True
+        """
+        M1, M2 = generate_mask_from_detector(
             image_np,
-            self.blazeface_model,
+            self.detector,
             device=self.device,
-            edge_blur_ks=self.mask_blur_ks
+            edge_blur_ks=self.mask_blur_ks,
+            strict_detection=self.strict_detection,
+            min_bbox_area_ratio=self.min_bbox_area_ratio,
+            max_bbox_area_ratio=self.max_bbox_area_ratio,
+            min_bbox_size=self.min_bbox_size,
+            fallback_detector=self.fallback_detector
         )
         return M1, M2
     
@@ -167,9 +302,13 @@ class DualTargetPGDAttack:
         Args:
             image_path: Path to input image
             output_dir: Directory to save results
+            output_prefix: Prefix for output files
             
         Returns:
             Adversarial image as numpy array
+            
+        Raises:
+            FaceDetectionError: If face detection fails validation and strict_detection=True
         """
         # 1. Load and preprocess image
         image_np = ImageProcessor.load_image(image_path, target_size=(256, 256))
@@ -179,8 +318,15 @@ class DualTargetPGDAttack:
         
         image_tensor = torch.from_numpy(image_np.transpose(2, 0, 1)).float().unsqueeze(0).to(self.device)
         
-        # 2. Generate masks using BlazeFace
-        M1, M2 = self.generate_masks(image_np)
+        # 2. Generate masks using face detector - THIS WILL STOP ATTACK IF DETECTION FAILS
+        # generate_masks() will raise FaceDetectionError if strict_detection=True and validation fails
+        try:
+            M1, M2 = self.generate_masks(image_np)
+        except FaceDetectionError as e:
+            if self.verbose:
+                print(f"[ATTACK ERROR] Face detection failed. Attack stopped.")
+                print(f"Error: {e}")
+            raise  # Re-raise to stop attack
         
         if self.verbose:
             print(f"Generated masks - M1: {M1.sum()/M1.numel():.2%} face, M2: {M2.sum()/M2.numel():.2%} background")
