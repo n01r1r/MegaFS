@@ -135,7 +135,15 @@ class FaceTransferModule(nn.Module):
         if self.type == 'ftm':
             latents_list = []
             for i in range(self.num_latents):
-                new_latent = self.blocks[i](idd_high[:, i], att_high[:, i])
+                block_output = self.blocks[i](idd_high[:, i], att_high[:, i])
+                # TransferCell returns (idd, att) tuple, we need just the idd (first element)
+                if isinstance(block_output, tuple):
+                    new_latent = block_output[0]  # Take idd from (idd, att) tuple
+                    # TransferCell returns unsqueezed [B, 1, 512], squeeze to [B, 512] for stacking
+                    if new_latent.dim() == 3 and new_latent.shape[1] == 1:
+                        new_latent = new_latent.squeeze(1)
+                else:
+                    new_latent = block_output
                 latents_list.append(new_latent)
             
             # Stack the 2D tensors into a 3D tensor

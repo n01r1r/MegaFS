@@ -164,8 +164,8 @@ class DualTargetPGDAttack:
     Dual-target PGD attack on HieRFE with Haar Cascade face detection for mask generation.
     
     Implements:
-    - L_ID: Identity destruction on face region (A1)
-    - L_SEM: Semantic collapse via background (A2)
+    - L_ID: Minimize cosine similarity to destroy identity in face region (A1)
+    - L_SEM: Suppress background features to collapse semantics (A2)
     """
     
     def __init__(
@@ -178,7 +178,7 @@ class DualTargetPGDAttack:
         lambda_2: float = 1.0,
         device: str = 'cuda',
         verbose: bool = True,
-        sem_variant: str = 'mse_f4',  # 'mse_f4' (default), 'l1_f4', 'self_collapse', 'self_collapse_mid', 'contrastive_bg'
+        sem_variant: str = 'self_collapse',  # 'mse_f4', 'l1_f4', 'self_collapse' (default), 'self_collapse_mid', 'contrastive_bg'
         preproc: str = 'none',
         mask_blur_ks: int = 0,
         loss_schedule: bool = False,
@@ -309,13 +309,8 @@ class DualTargetPGDAttack:
         
         # 5. PGD loop
         for i in range(self.num_iter):
-            # Adversarial image
-            adv_image = image_tensor + delta
-            adv_image_clipped = torch.clamp(adv_image, 0, 255)
-            
-            # Preprocess with masks
-            adv_face_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_clipped * M1)
-            adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_clipped * M2)
+            if delta.grad is not None:
+                delta.grad.zero_()
             
             # Optional loss schedule (simple ramp for lambda weights)
             if self.loss_schedule:
@@ -327,60 +322,102 @@ class DualTargetPGDAttack:
                 lambda_1 = self.lambda_1
                 lambda_2 = self.lambda_2
 
-            # Forward through HieRFE
-            adv_latents, adv_f4_from_face = self.identity_extractor(adv_face_preprocessed)
-            _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
+            L_ID_loss = torch.zeros(1, device=self.device)
+            L_SEM_loss = torch.zeros(1, device=self.device)
+            cos_sim = torch.zeros(1, device=self.device)
+            last_grad_norm = 0.0
             
-            # Loss computation
-            # L_ID: Maximize negative cosine similarity (destroy identity)
-            cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
-            L_ID_loss = -cos_sim
-            
-            # L_SEM variants
-            if self.sem_variant == 'l1_f4':
-                L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
-            elif self.sem_variant == 'self_collapse':
-                # Suppress background features rather than matching face f4
-                L_SEM_loss = -torch.mean(adv_f4_from_bg.pow(2))
-            elif self.sem_variant == 'self_collapse_mid':
-                # Use mid-level proxy by average of f8/f16 via FPN forward on preprocessed bg
-                with torch.no_grad():
-                    # compute FPN features from normalized bg (reuse encoder.fpn)
-                    f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
-                L_SEM_loss = -torch.mean(f8_mid.pow(2)) - 0.5 * torch.mean(f16_mid.pow(2))
-            elif self.sem_variant == 'contrastive_bg':
-                # Push bg features away from face features using margin on cosine
-                margin = 0.2
-                cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
-                L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+            # Identity step (eval mode)
+            if lambda_1 > 0:
+                self.identity_extractor.eval()
+                adv_image_face = torch.clamp(image_tensor + delta, 0, 255)
+                adv_face_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_face * M1)
+                adv_latents, _ = self.identity_extractor(adv_face_preprocessed)
+                cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
+                L_ID_loss = cos_sim
+                loss_id = lambda_1 * L_ID_loss
+                loss_id.backward()
+                grad = delta.grad.detach()
+                if self.clip_grad and self.clip_grad > 0:
+                    grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
+                normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
+                delta.data = delta.data - self.alpha * normalized_grad
+                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
+                delta.grad.zero_()
+                last_grad_norm = normalized_grad.abs().mean().item()
             else:
-                # Default: MSE between background features and face features
-                L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
+                self.identity_extractor.eval()
+                with torch.no_grad():
+                    adv_image_face = torch.clamp(image_tensor + delta, 0, 255)
+                    adv_face_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_face * M1)
+                    adv_latents, _ = self.identity_extractor(adv_face_preprocessed)
+                    cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
+                    L_ID_loss = cos_sim
             
-            # Combined loss
+            # Semantic step (train mode)
+            if lambda_2 > 0:
+                self.identity_extractor.train()
+                adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
+                adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
+                _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
+                
+                if self.sem_variant == 'l1_f4':
+                    L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
+                elif self.sem_variant == 'self_collapse':
+                    L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
+                elif self.sem_variant == 'self_collapse_mid':
+                    f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
+                    L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
+                elif self.sem_variant == 'contrastive_bg':
+                    margin = 0.2
+                    cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
+                    L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                else:
+                    L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
+                
+                loss_sem = lambda_2 * L_SEM_loss
+                loss_sem.backward()
+                grad = delta.grad.detach()
+                if self.clip_grad and self.clip_grad > 0:
+                    grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
+                normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
+                delta.data = delta.data - self.alpha * normalized_grad
+                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
+                delta.grad.zero_()
+                last_grad_norm = normalized_grad.abs().mean().item()
+            else:
+                self.identity_extractor.train()
+                with torch.no_grad():
+                    adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
+                    adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
+                    _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
+                    if self.sem_variant == 'l1_f4':
+                        L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
+                    elif self.sem_variant == 'self_collapse':
+                        L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
+                    elif self.sem_variant == 'self_collapse_mid':
+                        f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
+                        L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
+                    elif self.sem_variant == 'contrastive_bg':
+                        margin = 0.2
+                        cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
+                        L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                    else:
+                        L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
+            
+            self.identity_extractor.eval()
+            
             total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss)
-            
-            # Backward
-            total_loss.backward()
-            
-            # Gradient step (PGD)
-            grad = delta.grad.detach()
-            if self.clip_grad and self.clip_grad > 0:
-                grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
-            delta.data = delta.data - self.alpha * grad.sign()
-            delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
-            delta.grad.zero_()
             
             # Logging
             with torch.no_grad():
                 eps_sat = (delta.abs() >= (self.epsilon - 1e-6)).float().mean().item() * 100.0
-                grad_norm = grad.abs().mean().item()
-            self.loss_history['total'].append(total_loss.item())
-            self.loss_history['L_ID'].append(L_ID_loss.item())
-            self.loss_history['L_SEM'].append(L_SEM_loss.item())
+            self.loss_history['total'].append(float(total_loss.item()))
+            self.loss_history['L_ID'].append(float(L_ID_loss.item()))
+            self.loss_history['L_SEM'].append(float(L_SEM_loss.item()))
             self.loss_history['cos_sim'].append(float(cos_sim.item()))
             self.loss_history['eps_sat_pct'].append(eps_sat)
-            self.loss_history['grad_norm'].append(grad_norm)
+            self.loss_history['grad_norm'].append(last_grad_norm)
             
             if self.verbose and (i % 20 == 0 or i == self.num_iter - 1):
                 print(

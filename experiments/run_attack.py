@@ -63,14 +63,22 @@ def get_image_path(image_id: int, img_root: str) -> str:
     return padded if os.path.exists(padded) else non_padded
 
 
+def _format_val(val: float) -> str:
+    as_float = float(val)
+    if as_float.is_integer():
+        return str(int(as_float))
+    return str(as_float).replace('.', 'p')
+
+
 def make_exp_output_dir(base_dir: str, cfg: Dict[str, Any], image_id: int) -> str:
-    """Create and return a unique output directory for given config and image id."""
+    """Create and return a flat output directory for a given config and image id."""
     exp_name = (
-        f"exp_l1_{cfg['attack']['lambda_1']}_"
-        f"l2_{cfg['attack']['lambda_2']}_"
-        f"e_{cfg['attack']['epsilon']}"
+        f"{int(image_id):05d}"
+        f"_l1_{_format_val(cfg['attack']['lambda_1'])}"
+        f"_l2_{_format_val(cfg['attack']['lambda_2'])}"
+        f"_e_{_format_val(cfg['attack']['epsilon'])}"
     )
-    odir = os.path.join(base_dir, exp_name, str(image_id))
+    odir = os.path.join(base_dir, exp_name)
     os.makedirs(odir, exist_ok=True)
     return odir
 
@@ -192,7 +200,7 @@ def run_single_attack(
         lambda_2=config['attack']['lambda_2'],
         device=config['device'],
         verbose=config['experiment']['verbose'],
-        sem_variant=config.get('attack', {}).get('sem_variant', 'mse_f4'),
+        sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
         preproc=config.get('preprocessing', {}).get('mode', 'none'),
         mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
@@ -271,6 +279,19 @@ def run_single_attack(
                 swap_AC = model.swap(src_adv_tensor,   tgt_clean_tensor, return_tensor=False)
                 swap_AA = model.swap(src_adv_tensor,   tgt_adv_tensor,   return_tensor=False)
                 import cv2
+                
+                # Resize swap results to match original image size if needed
+                target_h, target_w = original.shape[:2]
+                def resize_if_needed(img):
+                    if img.shape[:2] != (target_h, target_w):
+                        return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+                    return img
+                
+                swap_CC = resize_if_needed(swap_CC)
+                swap_CA = resize_if_needed(swap_CA)
+                swap_AC = resize_if_needed(swap_AC)
+                swap_AA = resize_if_needed(swap_AA)
+                
                 # Save unified originals/adversarials
                 cv2.imwrite(os.path.join(output_path, 'source_clean.jpg'),  src_img[:, :, ::-1])
                 cv2.imwrite(os.path.join(output_path, 'target_clean.jpg'),  original[:, :, ::-1])
@@ -295,7 +316,9 @@ def run_single_attack(
                 else:
                     cv2.imwrite(os.path.join(output_path, 'swap_on_original.jpg'),    swap_CC[:, :, ::-1])
                     cv2.imwrite(os.path.join(output_path, 'swap_on_adversarial.jpg'), swap_CA[:, :, ::-1])
-                    comp = np.hstack([src_img, original, adversarial, swap_CC, swap_CA])
+                    swap_CC_resized = cv2.resize(swap_CC, (original.shape[1], original.shape[0]), interpolation=cv2.INTER_AREA)
+                    swap_CA_resized = cv2.resize(swap_CA, (original.shape[1], original.shape[0]), interpolation=cv2.INTER_AREA)
+                    comp = np.hstack([src_img, original, adversarial, swap_CC_resized, swap_CA_resized])
                     cv2.imwrite(os.path.join(output_path, 'swap_comparison.jpg'), comp[:, :, ::-1])
                 # manifest & effective config
                 manifest = {
@@ -419,7 +442,7 @@ def run_pair_attack(
         lambda_2=config['attack']['lambda_2'],
         device=config['device'],
         verbose=config['experiment']['verbose'],
-        sem_variant=config.get('attack', {}).get('sem_variant', 'mse_f4'),
+        sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
         preproc=config.get('preprocessing', {}).get('mode', 'none'),
         mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
@@ -468,8 +491,20 @@ def run_pair_attack(
     swap_AC = model.swap(src_adv_t,   tgt_clean_t, return_tensor=False)
     swap_AA = model.swap(src_adv_t,   tgt_adv_t,   return_tensor=False)
 
-    # Save raws
+    # Resize swap results to match original image size if needed
     import cv2
+    target_h, target_w = tgt_clean.shape[:2]
+    def resize_if_needed(img):
+        if img.shape[:2] != (target_h, target_w):
+            return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        return img
+    
+    swap_CC = resize_if_needed(swap_CC)
+    swap_CA = resize_if_needed(swap_CA)
+    swap_AC = resize_if_needed(swap_AC)
+    swap_AA = resize_if_needed(swap_AA)
+
+    # Save raws
     cv2.imwrite(os.path.join(output_dir, 'source_clean.jpg'),  src_clean[:, :, ::-1])
     cv2.imwrite(os.path.join(output_dir, 'target_clean.jpg'),  tgt_clean[:, :, ::-1])
     cv2.imwrite(os.path.join(output_dir, 'source_adv.jpg'),    src_adv[:, :, ::-1])
@@ -548,6 +583,8 @@ def main():
     parser.add_argument('--lambda_1', type=float, default=None)
     parser.add_argument('--lambda_2', type=float, default=None)
     parser.add_argument('--epsilon', type=float, default=None)
+    parser.add_argument('--alpha', type=float, default=None,
+                        help='Override PGD step size (default from config)')
     # Sweep mode (Python-only)
     parser.add_argument('--sweep', action='store_true', help='Enable sweep mode (runs multiple attacks)')
     parser.add_argument('--image-ids', type=int, nargs='*', default=None, help='List of image IDs for sweep')
@@ -599,6 +636,8 @@ def main():
         config['attack']['lambda_2'] = args.lambda_2
     if args.epsilon is not None:
         config['attack']['epsilon'] = args.epsilon
+    if args.alpha is not None:
+        config['attack']['alpha'] = args.alpha
     # New options
     if args.mask_edge_blur is not None:
         config.setdefault('mask_generation', {})

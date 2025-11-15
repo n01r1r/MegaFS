@@ -10,8 +10,9 @@ attack:
   num_iter: 50000   # Number of PGD iterations [reduced from 100K to 50K for testing]
   
   # Loss weights (dual objectives)
-  lambda_1: 4.0     # L_ID weight (identity destruction) [increased from 1.0]
-  lambda_2: 1.0     # L_SEM weight (semantic collapse)
+  lambda_1: 4.0     # L_ID weight (identity destruction)
+  lambda_2: 4.0     # L_SEM weight (semantic collapse) [raised to match lambda_1]
+  sem_variant: "self_collapse"  # L_SEM variant: 'mse_f4', 'l1_f4', 'self_collapse' (default), 'self_collapse_mid', 'contrastive_bg'
 
 mask_generation:
   method: "haar"  # Detector method: "haar"

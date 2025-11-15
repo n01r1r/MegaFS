@@ -311,18 +311,43 @@ class MegaFS(nn.Module):
         
         with context:
             try:
+                # Ensure inputs are tensors
+                if not isinstance(target, torch.Tensor):
+                    if isinstance(target, tuple):
+                        target = target[0]
+                    target = torch.tensor(target) if isinstance(target, np.ndarray) else target
+                if not isinstance(source, torch.Tensor):
+                    if isinstance(source, tuple):
+                        source = source[0]
+                    source = torch.tensor(source) if isinstance(source, np.ndarray) else source
+                
                 ts = torch.cat([target, source], dim=0).to(self.device)
-                lats, struct = self.encoder(ts)
+                encoder_output = self.encoder(ts)
+                
+                # Handle encoder output - it should return (latents, f4)
+                if isinstance(encoder_output, tuple):
+                    lats, struct = encoder_output
+                else:
+                    # If encoder returns single value, this is an error
+                    raise ValueError(f"Encoder returned unexpected type: {type(encoder_output)}, expected tuple")
 
                 idd_lats = lats[1:]
                 att_lats = lats[0].unsqueeze_(0)
                 att_struct = struct[0].unsqueeze_(0)
 
                 swapped_lats = self.swapper(idd_lats, att_lats)
-                fake_swap, _ = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
+                generator_output = self.generator(att_struct, [swapped_lats, None], randomize_noise=False)
+                
+                # Handle generator output - it should return (image, noise) tuple
+                if isinstance(generator_output, tuple):
+                    fake_swap, _ = generator_output
+                else:
+                    fake_swap = generator_output
                 
             except Exception as e:
                 self.debug_logger.log(f"Error in swap method: {e}", "ERROR")
+                import traceback
+                self.debug_logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
                 raise
 
             # If returning tensor, return raw output
@@ -330,9 +355,11 @@ class MegaFS(nn.Module):
                 return fake_swap
             
             # Original behavior: normalize and convert to numpy
-            fake_swap_max = torch.max(fake_swap)
-            fake_swap_min = torch.min(fake_swap)
-            denormed_fake_swap = (fake_swap[0] - fake_swap_min) / (fake_swap_max - fake_swap_min) * 255.0
+            # Detach if gradients are enabled to allow numpy conversion
+            fake_swap_detached = fake_swap.detach() if fake_swap.requires_grad else fake_swap
+            fake_swap_max = torch.max(fake_swap_detached)
+            fake_swap_min = torch.min(fake_swap_detached)
+            denormed_fake_swap = (fake_swap_detached[0] - fake_swap_min) / (fake_swap_max - fake_swap_min) * 255.0
             fake_swap_numpy = denormed_fake_swap.permute((1, 2, 0)).cpu().numpy()
             return fake_swap_numpy
 
