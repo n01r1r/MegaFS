@@ -1,6 +1,6 @@
 # Attack Pipeline Overview & Validation
 
-**Last Updated**: After official BlazeFace integration
+**Last Updated**: After Haar Cascade integration
 **Status**: ✅ Fully validated and operational
 
 ## 전체 Flow 다이어그램
@@ -22,8 +22,8 @@
 │   ├─ identity_extractor (HieRFE) 설정                          │
 │   ├─ PGD 파라미터: epsilon, alpha, num_iter                     │
 │   ├─ Loss weights: lambda_1, lambda_2                           │
-│   └─ BlazeFace 모델 로드 (get_blazeface_model)                  │
-│       └─ weights/blazeface.pth 자동 다운로드 (없을 경우)        │
+│   └─ Haar Cascade detector 초기화                               │
+│       └─ OpenCV built-in (no weights required)                   │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -34,9 +34,9 @@
 │   ├─ ImageProcessor.apply_preprocessing() → optional (homo/clahe)│
 │   └─ Convert to tensor: [1, 3, H, W], range [0, 255]            │
 │                                                                 │
-│ Step 2: Mask Generation (BlazeFace-based)                       │
-│   ├─ generate_mask_from_blazeface()                             │
-│   │   ├─ detect_faces() → bbox (x, y, w, h)                    │
+│ Step 2: Mask Generation (Haar Cascade-based)                     │
+│   ├─ generate_mask_from_detector()                              │
+│   │   ├─ detector.detect() → bbox (x, y, w, h)                 │
 │   │   ├─ ImageProcessor.make_ellipse_mask() → ellipse mask     │
 │   │   └─ Return M1 (face), M2 (background) [1, 3, H, W]        │
 │   └─ Masks are DETACHED (no gradient flow)                      │
@@ -89,7 +89,7 @@
 ### ✅ 간결성 (Conciseness)
 
 **강점:**
-1. **단순한 마스크 생성**: FPN 기반 복잡한 attention 계산 제거 → BlazeFace bbox → ellipse mask로 단순화
+1. **단순한 마스크 생성**: FPN 기반 복잡한 attention 계산 제거 → Haar Cascade bbox → ellipse mask로 단순화
 2. **명확한 단계 분리**: 각 단계가 독립적이고 이해하기 쉬움
 3. **불필요한 파라미터 제거**: FPN 관련 파라미터 완전 제거
 
@@ -100,10 +100,10 @@
 ### ✅ 호환성 (Compatibility)
 
 **검증 완료:**
-1. **BlazeFace 통합**: 
-   - ✅ 모델 초기화 시 자동 로드
-   - ✅ 가중치 자동 다운로드 기능
-   - ✅ Device 호환성 (CUDA/CPU)
+1. **Haar Cascade 통합**: 
+   - ✅ OpenCV built-in (no weights required)
+   - ✅ CPU 기반 (device 독립적)
+   - ✅ 빠른 초기화
 
 2. **데이터 타입 일관성**:
    - ✅ Image: numpy [H, W, 3], uint8 [0, 255]
@@ -116,10 +116,10 @@
 
 ### ⚠️ 잠재적 문제점
 
-1. **BlazeFace detect_faces() 구현 단순화**
-   - 현재: 간단한 bbox 추정 (anchor decoding 미구현)
-   - 영향: 정확도가 낮을 수 있음
-   - 해결: 실제 anchor 기반 decoding 구현 필요 (선택사항)
+1. **Haar Cascade 성능**
+   - 현재: OpenCV 기본 구현 사용
+   - 영향: 딥러닝 기반 방법보다 느릴 수 있음 (~50-100ms)
+   - 해결: 필요시 더 빠른 detector로 교체 가능 (선택사항)
 
 2. **Mask 생성 시점**
    - 현재: Clean image에서 한 번만 생성 (고정)
@@ -127,21 +127,21 @@
    - 단점: Adversarial image에서 face가 변해도 mask는 고정
 
 3. **에러 처리**
-   - ✅ BlazeFace 로드 실패 시 RuntimeError
-   - ✅ Face 미검출 시 center ellipse fallback
+   - ✅ Haar Cascade 로드 실패 시 RuntimeError
+   - ✅ Face 미검출 시 center ellipse fallback (strict_detection=False)
    - ⚠️ 이미지 로드 실패 시 ValueError (적절함)
 
 4. **메모리 효율성**
    - ✅ Masks는 detached (gradient 계산 불필요)
-   - ✅ BlazeFace는 eval mode (gradient 불필요)
+   - ✅ Haar Cascade는 CPU 기반 (GPU 메모리 사용 없음)
    - ⚠️ PGD loop에서 매 iteration마다 두 번의 forward pass (face + bg)
 
 ### 📊 Flow 호환성 체크리스트
 
 | 항목 | 상태 | 비고 |
 |------|------|------|
-| BlazeFace 모델 로드 | ✅ | 자동 다운로드 포함 |
-| Mask 생성 | ✅ | BlazeFace → ellipse mask |
+| Haar Cascade 초기화 | ✅ | OpenCV built-in |
+| Mask 생성 | ✅ | Haar Cascade → ellipse mask |
 | Image preprocessing | ✅ | 일관된 형식 |
 | Tensor normalization | ✅ | [-1, 1] 범위 |
 | Loss computation | ✅ | Dual-target 정상 작동 |
@@ -158,14 +158,14 @@
 
 ### 호환성: ⭐⭐⭐⭐☆ (4/5)
 - 전체적으로 잘 통합됨
-- BlazeFace detect_faces() 구현이 단순하지만 기본 기능은 작동
-- 향후 anchor 기반 decoding 추가 가능
+- Haar Cascade는 안정적이고 신뢰할 수 있음
+- 향후 더 빠른 detector로 교체 가능
 
 ### 권장 사항
 
 1. **즉시 적용 가능**: 현재 구현으로 바로 사용 가능
 2. **선택적 개선**: 
-   - BlazeFace anchor 기반 정확한 bbox decoding (정확도 향상)
+   - 더 빠른 detector (RetinaFace, MediaPipe 등) 통합 고려
    - `image_tensor_normalized` 미사용 변수 제거 또는 활용
 3. **모니터링**: Face 미검출 빈도 확인 (fallback 사용률)
 

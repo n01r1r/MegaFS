@@ -167,6 +167,21 @@ def run_single_attack(
         print(f"ERROR: Image not found: {image_path}")
         return None
     
+    # Extract mask generation config
+    mask_gen_config = config.get('mask_generation', {})
+    detector_method = mask_gen_config.get('method', 'haar')
+    strict_detection = mask_gen_config.get('strict_detection', True)
+    fallback_method = mask_gen_config.get('fallback_method', None)
+    validation_config = mask_gen_config.get('validation', {})
+    
+    # Build detector kwargs based on method
+    detector_kwargs = {}
+    if detector_method == 'haar':
+        haar_config = mask_gen_config.get('haar', {})
+        detector_kwargs['scale_factor'] = haar_config.get('scale_factor', 1.1)
+        detector_kwargs['min_neighbors'] = haar_config.get('min_neighbors', 3)
+        detector_kwargs['min_size'] = haar_config.get('min_size', 50)
+    
     # Create attack instance
     attack = DualTargetPGDAttack(
         identity_extractor=model.encoder,
@@ -182,7 +197,14 @@ def run_single_attack(
         mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
         clip_grad=config.get('attack', {}).get('clip_grad', 0.0),
-        checkpoint_dir=config['paths']['checkpoint_dir']
+        checkpoint_dir=config['paths']['checkpoint_dir'],
+        detector_method=detector_method,
+        strict_detection=strict_detection,
+        fallback_detector_method=fallback_method,
+        min_bbox_area_ratio=validation_config.get('min_bbox_area_ratio', 0.01),
+        max_bbox_area_ratio=validation_config.get('max_bbox_area_ratio', 0.95),
+        min_bbox_size=validation_config.get('min_bbox_size', 20),
+        detector_kwargs=detector_kwargs
     )
     
     # Execute attack
@@ -372,6 +394,21 @@ def run_pair_attack(
         print(f"ERROR: Missing images for pair: src={src_path}, tgt={tgt_path}")
         return {'success': False, 'error': 'missing_images'}
 
+    # Extract mask generation config
+    mask_gen_config = config.get('mask_generation', {})
+    detector_method = mask_gen_config.get('method', 'haar')
+    strict_detection = mask_gen_config.get('strict_detection', True)
+    fallback_method = mask_gen_config.get('fallback_method', None)
+    validation_config = mask_gen_config.get('validation', {})
+    
+    # Build detector kwargs based on method
+    detector_kwargs = {}
+    if detector_method == 'haar':
+        haar_config = mask_gen_config.get('haar', {})
+        detector_kwargs['scale_factor'] = haar_config.get('scale_factor', 1.1)
+        detector_kwargs['min_neighbors'] = haar_config.get('min_neighbors', 3)
+        detector_kwargs['min_size'] = haar_config.get('min_size', 50)
+    
     # Attack instance
     attack = DualTargetPGDAttack(
         identity_extractor=model.encoder,
@@ -387,7 +424,14 @@ def run_pair_attack(
         mask_blur_ks=config.get('mask_generation', {}).get('edge_blur', 0),
         loss_schedule=config.get('attack', {}).get('loss_schedule', False),
         clip_grad=config.get('attack', {}).get('clip_grad', 0.0),
-        checkpoint_dir=config['paths']['checkpoint_dir']
+        checkpoint_dir=config['paths']['checkpoint_dir'],
+        detector_method=detector_method,
+        strict_detection=strict_detection,
+        fallback_detector_method=fallback_method,
+        min_bbox_area_ratio=validation_config.get('min_bbox_area_ratio', 0.01),
+        max_bbox_area_ratio=validation_config.get('max_bbox_area_ratio', 0.95),
+        min_bbox_size=validation_config.get('min_bbox_size', 20),
+        detector_kwargs=detector_kwargs
     )
 
     # Load clean images

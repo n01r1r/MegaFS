@@ -4,55 +4,9 @@ This document describes the face detection implementations available in MegaFS a
 
 ## Current Implementations
 
-### 1. BlazeFace (with Padding Fix)
+### Haar-Cascade
 
 **Status**: ✅ Implemented and default
-
-**Description**: MediaPipe's BlazeFace is a lightweight, real-time face detection model optimized for mobile devices. We've enhanced it with padding support to handle large faces that fill most of the image.
-
-**Key Features**:
-- Fast inference (~10ms on GPU)
-- Lightweight model (~200KB)
-- Anchor-based detection
-- **Padding fix**: Automatically pads images before detection to handle large faces
-
-**Configuration**:
-```yaml
-method: "blazeface_padded"
-blazeface:
-  padding_ratio: 1.5  # Pad image by 1.5x before detection
-  threshold: 0.5
-  nms_threshold: 0.3
-```
-
-**Limitations**:
-- Originally designed for faces 20-50% of image size
-- Padding fix helps but may still struggle with very large faces (>90% of image)
-- Requires model weights and anchor files
-
-**Use Cases**:
-- Real-time applications
-- When speed is critical
-- Standard face sizes (20-80% of image)
-
-### 2. BlazeFace (Original, No Padding)
-
-**Status**: ✅ Implemented
-
-**Description**: Original BlazeFace implementation without padding. Maintained for backward compatibility.
-
-**Configuration**:
-```yaml
-method: "blazeface"
-```
-
-**Use Cases**:
-- Backward compatibility
-- When faces are known to be small-medium size
-
-### 3. Haar-Cascade
-
-**Status**: ✅ Implemented
 
 **Description**: Classic OpenCV Haar-Cascade face detector. Robust and reliable, especially for large faces.
 
@@ -60,7 +14,7 @@ method: "blazeface"
 - No anchor limitations
 - Works well with faces that fill most of image
 - Built into OpenCV (no external dependencies)
-- Slower than BlazeFace but more reliable for edge cases
+- Reliable for edge cases and large faces
 
 **Configuration**:
 ```yaml
@@ -78,8 +32,8 @@ haar:
 
 **Use Cases**:
 - Large faces (>80% of image)
-- Fallback when BlazeFace fails
-- When accuracy is more important than speed
+- When reliability is more important than speed
+- Standard face detection scenarios
 
 ## Suggested Alternative Approaches
 
@@ -221,8 +175,6 @@ haar:
 
 | Method | Speed (ms) | Accuracy | Large Face Handling | Model Size | Landmarks | Status |
 |--------|-----------|----------|---------------------|------------|-----------|--------|
-| BlazeFace (padded) | ~10 | Good | Good (with padding) | ~200KB | No | ✅ Implemented |
-| BlazeFace (original) | ~10 | Good | Fair | ~200KB | No | ✅ Implemented |
 | Haar-Cascade | ~50-100 | Fair | Excellent | Built-in | No | ✅ Implemented |
 | MTCNN | ~100-200 | Excellent | Good | ~2MB | Yes | 🔄 Suggested |
 | RetinaFace | ~50-100 | Excellent | Excellent | ~1.7MB | Yes | 🔄 Suggested |
@@ -268,12 +220,12 @@ mask_generation:
 ### For Large Face Detection (Primary Use Case)
 1. **RetinaFace** - Best accuracy for large faces
 2. **SCRFD** - Good alternative with similar performance
-3. **Haar-Cascade** - Current fallback, reliable but slower
+3. **Haar-Cascade** - Current implementation, reliable but slower
 
 ### For Speed-Critical Applications
-1. **BlazeFace (padded)** - Current default, fastest
-2. **YOLOv5-Face** - Good speed with better accuracy
-3. **MediaPipe** - Balanced option
+1. **YOLOv5-Face** - Good speed with better accuracy
+2. **MediaPipe** - Balanced option
+3. **Haar-Cascade** - Current implementation, slower but reliable
 
 ### For Maximum Accuracy
 1. **RetinaFace** - State-of-the-art
@@ -281,16 +233,15 @@ mask_generation:
 3. **SCRFD** - Good balance
 
 ### For Production Use
-1. **BlazeFace (padded)** - Current default, well-tested
-2. **Haar-Cascade** - Reliable fallback
-3. **MediaPipe** - Well-maintained by Google
+1. **Haar-Cascade** - Current default, well-tested and reliable
+2. **MediaPipe** - Well-maintained by Google
+3. **RetinaFace** - High accuracy option
 
 ## Current Default Configuration
 
 The default configuration uses:
-- **Method**: `blazeface_padded` (BlazeFace with padding fix)
+- **Method**: `haar` (Haar-Cascade face detector)
 - **Strict Detection**: `true` (attack stops if detection fails)
-- **Fallback**: `haar` (if primary fails and strict_detection=false)
+- **Fallback**: `null` (not used currently)
 
-This provides a good balance of speed and reliability, with the padding fix addressing the large face detection issue.
-
+This provides reliable face detection with good handling of large faces, though it is slower than deep learning-based methods.

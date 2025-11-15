@@ -1,14 +1,12 @@
 """
 Face detection abstraction layer for MegaFS
-Supports multiple face detection methods with unified interface
+Supports Haar Cascade face detection with unified interface
 """
 
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional, Dict, Any
 from abc import ABC, abstractmethod
-
-from models.blazeface import BlazeFace, get_blazeface_model, detect_faces as blazeface_detect
 
 
 class FaceDetector(ABC):
@@ -26,86 +24,6 @@ class FaceDetector(ABC):
             List of bounding boxes as (x, y, w, h) tuples in image coordinates
         """
         pass
-
-
-class BlazeFaceDetector(FaceDetector):
-    """BlazeFace face detector wrapper"""
-    
-    def __init__(
-        self,
-        model: Optional[BlazeFace] = None,
-        device: str = 'cuda',
-        checkpoint_dir: str = "weights",
-        padding_ratio: float = 1.5,
-        threshold: float = 0.5,
-        nms_threshold: float = 0.3
-    ):
-        """
-        Initialize BlazeFace detector.
-        
-        Args:
-            model: Pre-loaded BlazeFace model (optional)
-            device: Device to use ('cuda' or 'cpu')
-            checkpoint_dir: Directory containing weights
-            padding_ratio: Padding ratio for large face detection
-            threshold: Detection confidence threshold
-            nms_threshold: Non-maximum suppression threshold
-        """
-        if model is None:
-            self.model = get_blazeface_model(device=device, checkpoint_dir=checkpoint_dir)
-            if self.model is None:
-                raise RuntimeError("Failed to load BlazeFace model")
-        else:
-            self.model = model
-        
-        self.padding_ratio = padding_ratio
-        self.threshold = threshold
-        self.nms_threshold = nms_threshold
-    
-    def detect(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """Detect faces using BlazeFace"""
-        return blazeface_detect(
-            self.model,
-            image,
-            anchors=None,
-            threshold=self.threshold,
-            nms_threshold=self.nms_threshold,
-            padding_ratio=self.padding_ratio
-        )
-
-
-class BlazeFaceDetectorNoPadding(FaceDetector):
-    """BlazeFace detector without padding (original behavior)"""
-    
-    def __init__(
-        self,
-        model: Optional[BlazeFace] = None,
-        device: str = 'cuda',
-        checkpoint_dir: str = "weights",
-        threshold: float = 0.5,
-        nms_threshold: float = 0.3
-    ):
-        """Initialize BlazeFace detector without padding"""
-        if model is None:
-            self.model = get_blazeface_model(device=device, checkpoint_dir=checkpoint_dir)
-            if self.model is None:
-                raise RuntimeError("Failed to load BlazeFace model")
-        else:
-            self.model = model
-        
-        self.threshold = threshold
-        self.nms_threshold = nms_threshold
-    
-    def detect(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """Detect faces using BlazeFace without padding"""
-        return blazeface_detect(
-            self.model,
-            image,
-            anchors=None,
-            threshold=self.threshold,
-            nms_threshold=self.nms_threshold,
-            padding_ratio=1.0  # No padding
-        )
 
 
 class HaarCascadeDetector(FaceDetector):
@@ -223,7 +141,7 @@ def validate_detection(
 
 
 def get_face_detector(
-    method: str = "blazeface_padded",
+    method: str = "haar",
     device: str = 'cuda',
     checkpoint_dir: str = "weights",
     **kwargs
@@ -232,9 +150,9 @@ def get_face_detector(
     Factory function to get face detector instance.
     
     Args:
-        method: Detector method ("blazeface_padded", "blazeface", "haar")
-        device: Device for BlazeFace ('cuda' or 'cpu')
-        checkpoint_dir: Directory containing BlazeFace weights
+        method: Detector method ("haar")
+        device: Device for detectors ('cuda' or 'cpu') - not used for Haar
+        checkpoint_dir: Directory containing detector weights - not used for Haar
         **kwargs: Additional detector-specific parameters
         
     Returns:
@@ -243,31 +161,7 @@ def get_face_detector(
     Raises:
         ValueError: If method is not supported
     """
-    if method == "blazeface_padded":
-        padding_ratio = kwargs.get('padding_ratio', 1.5)
-        threshold = kwargs.get('threshold', 0.5)
-        nms_threshold = kwargs.get('nms_threshold', 0.3)
-        return BlazeFaceDetector(
-            model=None,
-            device=device,
-            checkpoint_dir=checkpoint_dir,
-            padding_ratio=padding_ratio,
-            threshold=threshold,
-            nms_threshold=nms_threshold
-        )
-    
-    elif method == "blazeface":
-        threshold = kwargs.get('threshold', 0.5)
-        nms_threshold = kwargs.get('nms_threshold', 0.3)
-        return BlazeFaceDetectorNoPadding(
-            model=None,
-            device=device,
-            checkpoint_dir=checkpoint_dir,
-            threshold=threshold,
-            nms_threshold=nms_threshold
-        )
-    
-    elif method == "haar":
+    if method == "haar":
         scale_factor = kwargs.get('scale_factor', 1.1)
         min_neighbors = kwargs.get('min_neighbors', 3)
         min_size = kwargs.get('min_size', 50)
@@ -280,5 +174,5 @@ def get_face_detector(
         )
     
     else:
-        raise ValueError(f"Unsupported detector method: {method}. Supported: 'blazeface_padded', 'blazeface', 'haar'")
+        raise ValueError(f"Unsupported detector method: {method}. Supported: 'haar'")
 

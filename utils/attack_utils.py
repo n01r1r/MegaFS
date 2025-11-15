@@ -1,6 +1,6 @@
 """
 Adversarial attack utilities for MegaFS using HieRFE's dual-target strategy
-Based on BlazeFace face detection for mask generation
+Uses Haar Cascade face detection for mask generation
 """
 
 import torch
@@ -12,10 +12,9 @@ from pathlib import Path
 
 from .image_utils import ImageProcessor
 from models.hierfe import HieRFE
-from models.blazeface import get_blazeface_model, detect_faces
 from .face_detectors import (
     FaceDetector, get_face_detector, validate_detection,
-    BlazeFaceDetector, HaarCascadeDetector
+    HaarCascadeDetector
 )
 
 
@@ -129,37 +128,6 @@ def generate_mask_from_detector(
     return M1.detach(), M2.detach()
 
 
-def generate_mask_from_blazeface(
-    image_np: np.ndarray,
-    blazeface_model,
-    device: str = 'cuda',
-    edge_blur_ks: int = 0
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generate face mask M1 using BlazeFace face detection (backward compatibility).
-    
-    Args:
-        image_np: Input image as numpy array [H, W, 3] in RGB format, range [0, 255]
-        blazeface_model: BlazeFace model instance
-        device: Device for computation
-        edge_blur_ks: Kernel size for edge blur (0 = no blur)
-        
-    Returns:
-        M1 (face mask), M2 (background mask), both detached tensors [1, 3, H, W]
-    """
-    # Create detector wrapper for backward compatibility
-    detector = BlazeFaceDetector(model=blazeface_model, device=device)
-    
-    # Use non-strict mode for backward compatibility
-    return generate_mask_from_detector(
-        image_np,
-        detector,
-        device=device,
-        edge_blur_ks=edge_blur_ks,
-        strict_detection=False  # Backward compatible: use fallback ellipse
-    )
-
-
 def visualize_mask(mask: torch.Tensor, save_path: Optional[str] = None) -> np.ndarray:
     """
     Visualize mask as RGB image.
@@ -193,7 +161,7 @@ def visualize_mask(mask: torch.Tensor, save_path: Optional[str] = None) -> np.nd
 
 class DualTargetPGDAttack:
     """
-    Dual-target PGD attack on HieRFE with BlazeFace mask generation.
+    Dual-target PGD attack on HieRFE with Haar Cascade face detection for mask generation.
     
     Implements:
     - L_ID: Identity destruction on face region (A1)
@@ -216,7 +184,7 @@ class DualTargetPGDAttack:
         loss_schedule: bool = False,
         clip_grad: float = 0.0,
         checkpoint_dir: str = "weights",
-        detector_method: str = "blazeface_padded",
+        detector_method: str = "haar",
         strict_detection: bool = True,
         fallback_detector_method: Optional[str] = None,
         min_bbox_area_ratio: float = 0.01,

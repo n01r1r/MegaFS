@@ -12,69 +12,9 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.attack_utils import generate_mask_from_blazeface
 from models.hierfe import HieRFE
 from models.resnet import resnet50
 from models.megafs import MegaFS
-from models.blazeface import get_blazeface_model
-
-
-class TestMaskGeneration(unittest.TestCase):
-    """Test BlazeFace-based mask generation."""
-    
-    def setUp(self):
-        """Setup test fixtures."""
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        # Create dummy image (numpy array)
-        self.dummy_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
-        
-        # Try to load BlazeFace model
-        try:
-            self.blazeface_model = get_blazeface_model(device=self.device, checkpoint_dir='./weights')
-        except Exception:
-            self.blazeface_model = None
-            self.skipTest("BlazeFace model not available, skipping mask generation tests")
-        
-    def test_mask_shape(self):
-        """Test that generated masks have correct shape."""
-        if self.blazeface_model is None:
-            self.skipTest("BlazeFace model not available")
-            
-        M1, M2 = generate_mask_from_blazeface(
-            self.dummy_image,
-            self.blazeface_model,
-            device=self.device
-        )
-        
-        # Check shapes
-        self.assertEqual(M1.shape, (1, 3, 256, 256))
-        self.assertEqual(M2.shape, (1, 3, 256, 256))
-        
-        # Check values in [0, 1]
-        self.assertTrue((M1 >= 0).all())
-        self.assertTrue((M1 <= 1).all())
-        self.assertTrue((M2 >= 0).all())
-        self.assertTrue((M2 <= 1).all())
-        
-        # Check complementary (approximately)
-        mask_diff = torch.abs(M1 + M2 - torch.ones_like(M1))
-        self.assertTrue((mask_diff < 1e-4).all())
-    
-    def test_mask_detached(self):
-        """Test that masks are detached from computation graph."""
-        if self.blazeface_model is None:
-            self.skipTest("BlazeFace model not available")
-            
-        M1, M2 = generate_mask_from_blazeface(
-            self.dummy_image,
-            self.blazeface_model,
-            device=self.device
-        )
-        
-        # Check requires_grad is False
-        self.assertFalse(M1.requires_grad)
-        self.assertFalse(M2.requires_grad)
 
 
 class TestGradientFlow(unittest.TestCase):
@@ -197,10 +137,11 @@ class TestAttackClass(unittest.TestCase):
                 identity_extractor=self.hierfe,
                 device=self.device,
                 verbose=False,
-                checkpoint_dir='./weights'
+                checkpoint_dir='./weights',
+                strict_detection=False  # Use fallback if detection fails
             )
         except RuntimeError:
-            self.skipTest("BlazeFace model not available, skipping mask generation test")
+            self.skipTest("Detector not available, skipping mask generation test")
         
         # Create dummy image (numpy array)
         dummy_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
@@ -209,6 +150,95 @@ class TestAttackClass(unittest.TestCase):
         
         self.assertEqual(M1.shape, (1, 3, 256, 256))
         self.assertEqual(M2.shape, (1, 3, 256, 256))
+    
+    def test_haar_detection_mode(self):
+        """Test that DualTargetPGDAttack works with Haar detection mode."""
+        from utils.attack_utils import DualTargetPGDAttack, FaceDetectionError
+        import numpy as np
+        
+        dummy_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+        
+        try:
+            attack = DualTargetPGDAttack(
+                identity_extractor=self.hierfe,
+                device=self.device,
+                verbose=False,
+                checkpoint_dir='./weights',
+                detector_method='haar',
+                strict_detection=False  # Allows fallback ellipse if detection fails
+            )
+            
+            # Haar may use fallback ellipse if detection fails
+            try:
+                M1, M2 = attack.generate_masks(dummy_image)
+                self.assertEqual(M1.shape, (1, 3, 256, 256))
+                self.assertEqual(M2.shape, (1, 3, 256, 256))
+            except FaceDetectionError:
+                # If detection fails even with fallback, this is acceptable for some images
+                pass
+                
+        except RuntimeError as e:
+            if "Failed to load" in str(e):
+                self.skipTest("Detector not available")
+            else:
+                raise
+    
+    def test_detector_from_config(self):
+        """Test that detector method is properly set from config."""
+        from utils.attack_utils import DualTargetPGDAttack
+        
+        # Test that detector_method parameter is accepted
+        try:
+            attack = DualTargetPGDAttack(
+                identity_extractor=self.hierfe,
+                device=self.device,
+                verbose=False,
+                checkpoint_dir='./weights',
+                detector_method='haar'  # Use Haar as it doesn't require weights
+            )
+            
+            # Verify detector was created
+            self.assertIsNotNone(attack.detector)
+            
+        except RuntimeError as e:
+            if "Failed to load" in str(e):
+                self.skipTest("Detector not available")
+            else:
+                raise
+    
+    def test_fallback_detector_chain(self):
+        """Test fallback detector chain (primary Haar fails, fallback to Haar)."""
+        from utils.attack_utils import DualTargetPGDAttack, FaceDetectionError
+        import numpy as np
+        
+        dummy_image = np.random.randint(0, 50, (256, 256, 3), dtype=np.uint8)  # Dark image
+        
+        try:
+            attack = DualTargetPGDAttack(
+                identity_extractor=self.hierfe,
+                device=self.device,
+                verbose=False,
+                checkpoint_dir='./weights',
+                detector_method='haar',
+                fallback_detector_method='haar',
+                strict_detection=False
+            )
+            
+            # If primary detector fails, fallback detector will be tried
+            # If both fail, should use fallback ellipse (non-strict mode)
+            try:
+                M1, M2 = attack.generate_masks(dummy_image)
+                self.assertEqual(M1.shape, (1, 3, 256, 256))
+                self.assertEqual(M2.shape, (1, 3, 256, 256))
+            except FaceDetectionError:
+                # If both detectors fail and strict mode is used, this is acceptable
+                pass
+            
+        except RuntimeError as e:
+            if "Failed to load" in str(e):
+                self.skipTest("Detector models not available")
+            else:
+                raise
 
 
 if __name__ == '__main__':

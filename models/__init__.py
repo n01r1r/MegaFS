@@ -9,14 +9,11 @@ from .soft_erosion import SoftErosion
 from .megafs import MegaFS, encode_segmentation_rgb
 from .weight_loaders import WeightLoader, FTMWeightLoader, InjectionWeightLoader, LCRWeightLoader, StyleGAN2WeightLoader, verify_all_weights
 from .model_factory import ModelFactory
-from .blazeface import BlazeFace, BlazeBlock, load_blazeface_weights, detect_faces, get_blazeface_model
-
 __all__ = [
     'ResNet', 'BasicBlock', 'Bottleneck', 'resnet50',
     'FPN', 'HieRFE', 'StyleMapping', 'FaceTransferModule', 'InjectionBlock', 'InjectionResBlock', 'LCRBlock', 'TransferCell', 'LCR',
     'Generator', 'Discriminator', 'PixelNorm', 'EqualLinear', 'EqualConv2d', 'StyledConv', 'ToRGB', 'ConstantInput', 'Blur', 'Upsample', 'Downsample', 'ModulatedConv2d', 'NoiseInjection', 'ScaledLeakyReLU', 'ConvLayer', 'ResBlock',
     'SoftErosion', 'MegaFS', 'encode_segmentation_rgb',
     'WeightLoader', 'FTMWeightLoader', 'InjectionWeightLoader', 'LCRWeightLoader', 'StyleGAN2WeightLoader', 'verify_all_weights',
-    'ModelFactory',
-    'BlazeFace', 'BlazeBlock', 'load_blazeface_weights', 'detect_faces', 'get_blazeface_model'
+    'ModelFactory'
 ]
