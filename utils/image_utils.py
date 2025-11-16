@@ -232,20 +232,25 @@ class ImageProcessor:
 
     @staticmethod
     def make_ellipse_mask(image: np.ndarray, bbox: Optional[Tuple[int, int, int, int]], edge_blur_ks: int = 0) -> np.ndarray:
-        """Create a soft elliptical face mask from bbox on an RGB image.
-        Returns float mask in [0,1] shape [H,W,3]. If bbox is None, returns central ellipse.
+        """Create a circular face mask from bbox on an RGB image.
+        The circle is the minimum circle that contains the bounding box.
+        Returns float mask in [0,1] shape [H,W,3]. If bbox is None, returns central circle.
         """
         h, w = image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
         if bbox is None:
             cx, cy = w // 2, h // 2
-            ax, ay = int(w * 0.25), int(h * 0.35)
+            # Use smaller dimension for central circle
+            radius = int(min(w, h) * 0.25)
         else:
             x, y, bw, bh = bbox
+            # Center of bbox
             cx, cy = x + bw // 2, y + bh // 2
-            ax, ay = int(bw * 0.6), int(bh * 0.85)
-        # Draw filled ellipse
-        cv2.ellipse(mask, (cx, cy), (max(1, ax), max(1, ay)), 0, 0, 360, 255, -1)
+            # Minimum radius to contain bbox: half of diagonal
+            # radius = sqrt((bw/2)^2 + (bh/2)^2) = sqrt(bw^2 + bh^2) / 2
+            radius = int(np.ceil(np.sqrt(bw * bw + bh * bh) / 2.0))
+        # Draw filled circle
+        cv2.circle(mask, (cx, cy), max(1, radius), 255, -1)
         # Optional blur
         if edge_blur_ks and edge_blur_ks > 1 and edge_blur_ks % 2 == 1:
             mask = cv2.GaussianBlur(mask, (edge_blur_ks, edge_blur_ks), 0)
