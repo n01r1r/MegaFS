@@ -29,20 +29,20 @@ def setup_environment():
         from tqdm import tqdm
         import matplotlib.pyplot as plt
         
-        print("✓ All basic libraries imported")
-        print(f"✓ PyTorch version: {torch.__version__}")
+        print("[OK] All basic libraries imported")
+        print(f"[OK] PyTorch version: {torch.__version__}")
         
         # Check CUDA availability
         if torch.cuda.is_available():
-            print(f"✓ CUDA available - Device: {torch.cuda.get_device_name(0)}")
-            print(f"✓ CUDA version: {torch.version.cuda}")
+            print(f"[OK] CUDA available - Device: {torch.cuda.get_device_name(0)}")
+            print(f"[OK] CUDA version: {torch.version.cuda}")
         else:
-            print("⚠ CUDA not available - will use CPU (slower)")
+            print("[WARN] CUDA not available - will use CPU (slower)")
         
         return torch
         
     except ImportError as e:
-        print(f"✗ Failed to import libraries: {e}")
+        print(f"[FAIL] Failed to import libraries: {e}")
         print("Please install requirements: pip install -r requirements.txt")
         sys.exit(1)
 
@@ -59,11 +59,11 @@ def import_megafs_components():
         from utils.debug_utils import check_system_requirements
         from utils.data_utils import DataMapManager
         
-        print("✓ All MegaFS components imported")
+        print("[OK] All MegaFS components imported")
         return Config, DEFAULT_CONFIGS, MegaFS, verify_all_weights, check_system_requirements, DataMapManager
         
     except ImportError as e:
-        print(f"✗ Failed to import MegaFS components: {e}")
+        print(f"[FAIL] Failed to import MegaFS components: {e}")
         print("Make sure you're running from the MegaFS directory")
         sys.exit(1)
 
@@ -95,15 +95,15 @@ def setup_paths(dataset_root=None, weights_dir=None, data_map_path=None):
     
     # Check if directories exist
     if not os.path.exists(dataset_root):
-        print(f"⚠ Warning: Dataset root not found: {dataset_root}")
+        print(f"[WARN] Warning: Dataset root not found: {dataset_root}")
         print("Please ensure the dataset is extracted to the correct location")
     
     if not os.path.exists(weights_dir):
-        print(f"⚠ Warning: Weights directory not found: {weights_dir}")
+        print(f"[WARN] Warning: Weights directory not found: {weights_dir}")
         print("Please ensure weight files are in the weights directory")
     
     if not os.path.exists(data_map_path):
-        print(f"⚠ Warning: Data map not found: {data_map_path}")
+        print(f"[WARN] Warning: Data map not found: {data_map_path}")
         print("The data_map.json will be generated if needed")
     
     return {
@@ -121,7 +121,7 @@ def load_data_map(data_map_path, dataset_root):
     print("=" * 60)
     
     if not os.path.exists(data_map_path):
-        print(f"✗ Data map not found at: {data_map_path}")
+        print(f"[FAIL] Data map not found at: {data_map_path}")
         print("Creating new data map...")
         from create_datamap import build_data_map
         import json
@@ -136,25 +136,25 @@ def load_data_map(data_map_path, dataset_root):
             with open(data_map_path, 'w') as f:
                 json.dump(data_map, f, indent=4)
             
-            print(f"✓ Data map created and saved to: {data_map_path}")
-            print(f"✓ Found {len(data_map)} entries")
+            print(f"[OK] Data map created and saved to: {data_map_path}")
+            print(f"[OK] Found {len(data_map)} entries")
         else:
-            print("✗ Cannot create data map - required directories not found")
+            print("[FAIL] Cannot create data map - required directories not found")
             return None
     else:
-        print(f"✓ Data map found at: {data_map_path}")
+        print(f"[OK] Data map found at: {data_map_path}")
     
     # Load data map using DataMapManager
     DataMapManager_module = import_megafs_components()[5]  # DataMapManager
     data_manager = DataMapManager_module(data_map_path)
     
     valid_ids = data_manager.get_valid_ids(dataset_root, sample_size=None)
-    print(f"✓ Found {len(valid_ids)} valid entries")
+    print(f"[OK] Found {len(valid_ids)} valid entries")
     
     # Verify sample
     if valid_ids:
         stats = data_manager.verify_sample(sample_size=10, dataset_root=dataset_root)
-        print(f"✓ Sample verification - {stats}")
+        print(f"[OK] Sample verification - {stats}")
     
     return data_manager, valid_ids
 
@@ -186,10 +186,10 @@ def verify_weights(weights_dir):
     verify_all_weights_module = import_megafs_components()[3]  # verify_all_weights
     
     if verify_all_weights_module(weights_dir):
-        print("✓ All weight files verified")
+        print("[OK] All weight files verified")
         return True
     else:
-        print("✗ Some weight files missing")
+        print("[FAIL] Some weight files missing")
         print("Required files:")
         print("  - ftm_final.pth")
         print("  - injection_final.pth")
@@ -222,46 +222,134 @@ def initialize_model(config, data_map, swap_type='ftm', enable_grads=False):
             device=device
         )
         
-        print(f"✓ {swap_type.upper()}-MegaFS model initialized")
-        print(f"✓ Device: {device}")
+        print(f"[OK] {swap_type.upper()}-MegaFS model initialized")
+        print(f"[OK] Device: {device}")
         if enable_grads:
-            print("✓ Gradient computation enabled")
+            print("[OK] Gradient computation enabled")
         
         return handler
         
     except Exception as e:
-        print(f"✗ Failed to initialize model: {e}")
+        print(f"[FAIL] Failed to initialize model: {e}")
         import traceback
         traceback.print_exc()
         return None
 
-def run_single_swap(handler, src_id, tgt_id, refine=True, save_path=None):
-    """Run face swap for a single image pair"""
+def run_single_swap(handler, src_id, tgt_id, refine=True, save_path=None, 
+                    src_adv_path=None, tgt_adv_path=None):
+    """Run face swap for a single image pair.
+    
+    Args:
+        handler: MegaFS model instance
+        src_id: Source image ID
+        tgt_id: Target image ID
+        refine: Whether to apply refinement
+        save_path: Optional path to save result
+        src_adv_path: Optional path to adversarial source image (if None, uses original)
+        tgt_adv_path: Optional path to adversarial target image (if None, uses original)
+    
+    Returns:
+        Tuple of (result_path, result_image) or (None, None) on failure
+    """
     if not handler:
-        print("✗ Error: Handler not initialized")
-        return None
+        print("[FAIL] Error: Handler not initialized")
+        return None, None
     
     print("\n" + "=" * 60)
     print(f"Running face swap - Source ID: {src_id}, Target ID: {tgt_id}")
+    if src_adv_path:
+        print(f"  Using adversarial source: {src_adv_path}")
+    if tgt_adv_path:
+        print(f"  Using adversarial target: {tgt_adv_path}")
     print("=" * 60)
     
     try:
-        result_path, result_image = handler.run(
-            src_idx=src_id,
-            tgt_idx=tgt_id,
-            refine=refine,
-            save_path=save_path
-        )
+        # Store original read_pair method
+        original_read_pair = handler.read_pair
+        
+        # Create patched read_pair if adversarial paths are provided
+        if src_adv_path or tgt_adv_path:
+            from utils.image_utils import ImageProcessor
+            from models.megafs import encode_segmentation_rgb
+            
+            def patched_read_pair(src_idx, tgt_idx):
+                use_adv_src = (src_idx == src_id and src_adv_path and os.path.exists(src_adv_path))
+                use_adv_tgt = (tgt_idx == tgt_id and tgt_adv_path and os.path.exists(tgt_adv_path))
+                
+                if not use_adv_src and not use_adv_tgt:
+                    return original_read_pair(src_idx, tgt_idx)
+                
+                # Load images
+                if use_adv_src and use_adv_tgt:
+                    src_img = ImageProcessor.load_image(src_adv_path, target_size=None)
+                    tgt_img = ImageProcessor.load_image(tgt_adv_path, target_size=None)
+                    # Load mask for target
+                    _, tgt_mask_path = handler.data_manager.resolve_paths_for_id(
+                        tgt_id, handler.config.paths.dataset_root
+                    )
+                    tgt_mask = None
+                    if tgt_mask_path and os.path.exists(tgt_mask_path):
+                        tgt_mask_raw = ImageProcessor.load_image(tgt_mask_path, target_size=None)
+                        if tgt_mask_raw is not None:
+                            tgt_mask = encode_segmentation_rgb(tgt_mask_raw)
+                elif use_adv_src:
+                    src_img = ImageProcessor.load_image(src_adv_path, target_size=None)
+                    _, tgt_img, tgt_mask = original_read_pair(src_idx, tgt_idx)
+                elif use_adv_tgt:
+                    src_img, _, _ = original_read_pair(src_idx, tgt_idx)
+                    tgt_img = ImageProcessor.load_image(tgt_adv_path, target_size=None)
+                    # Load mask for target
+                    _, tgt_mask_path = handler.data_manager.resolve_paths_for_id(
+                        tgt_id, handler.config.paths.dataset_root
+                    )
+                    tgt_mask = None
+                    if tgt_mask_path and os.path.exists(tgt_mask_path):
+                        tgt_mask_raw = ImageProcessor.load_image(tgt_mask_path, target_size=None)
+                        if tgt_mask_raw is not None:
+                            tgt_mask = encode_segmentation_rgb(tgt_mask_raw)
+                else:
+                    return original_read_pair(src_idx, tgt_idx)
+                
+                return src_img, tgt_img, tgt_mask
+            
+            # Apply patch temporarily
+            handler.read_pair = patched_read_pair
+        
+        # Ensure handler is in eval mode for inference
+        was_training = handler.training
+        if was_training:
+            handler.eval()
+            if hasattr(handler, 'generator'):
+                handler.generator.eval()
+        
+        try:
+            import torch
+            with torch.no_grad():
+                result_path, result_image = handler.run(
+                    src_idx=src_id,
+                    tgt_idx=tgt_id,
+                    refine=refine,
+                    save_path=save_path
+                )
+        finally:
+            # Restore original read_pair
+            if src_adv_path or tgt_adv_path:
+                handler.read_pair = original_read_pair
+            # Restore training mode if needed
+            if was_training:
+                handler.train()
+                if hasattr(handler, 'generator'):
+                    handler.generator.train()
         
         if result_path:
-            print(f"✓ Result saved to: {result_path}")
+            print(f"[OK] Result saved to: {result_path}")
         else:
-            print("⚠ Face swap completed but not saved to file")
+            print("[WARN] Face swap completed but not saved to file")
             
         return result_path, result_image
         
     except Exception as e:
-        print(f"✗ Face swap failed: {e}")
+        print(f"[FAIL] Face swap failed: {e}")
         import traceback
         traceback.print_exc()
         return None, None
@@ -288,6 +376,10 @@ def main():
                         help='Output directory for results')
     parser.add_argument('--enable-grads', action='store_true',
                         help='Enable gradient computation for experiments')
+    parser.add_argument('--src-adv-path', type=str, default=None,
+                        help='Path to adversarial source image (if None, uses original)')
+    parser.add_argument('--tgt-adv-path', type=str, default=None,
+                        help='Path to adversarial target image (if None, uses original)')
     
     args = parser.parse_args()
     
@@ -314,7 +406,7 @@ def main():
     data_manager, valid_ids = load_data_map(paths['data_map_path'], paths['dataset_root'])
     
     if data_manager is None or not valid_ids:
-        print("✗ Failed to load data map")
+        print("[FAIL] Failed to load data map")
         sys.exit(1)
     
     # Setup configuration
@@ -322,7 +414,7 @@ def main():
     
     # Verify weights
     if not verify_weights(paths['weights_dir']):
-        print("⚠ Warning: Some weight files are missing")
+        print("[WARN] Warning: Some weight files are missing")
         response = input("Continue anyway? (y/n): ")
         if response.lower() != 'y':
             sys.exit(1)
@@ -334,21 +426,21 @@ def main():
                               enable_grads=args.enable_grads)
     
     if handler is None:
-        print("✗ Failed to initialize model")
+        print("[FAIL] Failed to initialize model")
         sys.exit(1)
     
     # Validate IDs
     src_id, tgt_id = args.src_id, args.tgt_id
     
     if src_id not in valid_ids:
-        print(f"⚠ Warning: Source ID {src_id} not in valid set")
+        print(f"[WARN] Warning: Source ID {src_id} not in valid set")
         print(f"Available IDs: {len(valid_ids)}")
         if len(valid_ids) >= 1:
             src_id = valid_ids[0]
             print(f"Using first valid ID: {src_id}")
     
     if tgt_id not in valid_ids:
-        print(f"⚠ Warning: Target ID {tgt_id} not in valid set")
+        print(f"[WARN] Warning: Target ID {tgt_id} not in valid set")
         if len(valid_ids) >= 2:
             tgt_id = valid_ids[1]
             print(f"Using second valid ID: {tgt_id}")
@@ -369,15 +461,17 @@ def main():
         src_id, 
         tgt_id,
         refine=not args.no_refine,
-        save_path=save_path
+        save_path=save_path,
+        src_adv_path=args.src_adv_path,
+        tgt_adv_path=args.tgt_adv_path
     )
     
     if result_path:
-        print(f"\n✓ SUCCESS: Face swap completed")
-        print(f"✓ Result saved to: {result_path}")
+        print(f"\n[OK] SUCCESS: Face swap completed")
+        print(f"[OK] Result saved to: {result_path}")
         print("\nTo view the result, open the saved image file.")
     else:
-        print("\n✗ Face swap failed")
+        print("\n[FAIL] Face swap failed")
         sys.exit(1)
 
 if __name__ == "__main__":

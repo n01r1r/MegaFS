@@ -302,8 +302,6 @@ class MegaFS(nn.Module):
         Returns:
             Swapped face as tensor or numpy array
         """
-        print(f'[DEBUG][swap] source: {type(source)}, shape={getattr(source, "shape", None)}')
-        print(f'[DEBUG][swap] target: {type(target)}, shape={getattr(target, "shape", None)}')
         assert isinstance(source, torch.Tensor), f'source is {type(source)}!'
         assert isinstance(target, torch.Tensor), f'target is {type(target)}!'
         # Choose context based on gradient mode

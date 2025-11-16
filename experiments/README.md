@@ -109,7 +109,7 @@ results/
 
 1. Use Haar Cascade (OpenCV) to detect face bounding box
 2. Select largest face if multiple detections
-3. Create ellipse mask from bounding box using `ImageProcessor.make_ellipse_mask()`
+3. Create ellipse mask from bounding box using `ImageProcessor.make_ellipse_mask()` (we wrap the rectangle with a softened ellipse so that blending behaves like the original MegaFS implementation and avoids harsh mask edges)
 4. Apply optional edge blur for smooth mask boundaries
 5. Generate background mask as complement of face mask
 

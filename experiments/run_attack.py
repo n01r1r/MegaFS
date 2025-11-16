@@ -7,8 +7,7 @@ import os
 import sys
 import argparse
 import yaml
-from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import random
 import itertools
 import json
@@ -19,9 +18,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import numpy as np
+import cv2
 from config import Config
 from models.megafs import MegaFS
 from utils.attack_utils import DualTargetPGDAttack, compute_metrics
+from utils.image_utils import ImageProcessor
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -258,10 +259,6 @@ def run_single_attack(
                 src_file = random.choice(candidates)
                 src_path = os.path.join(img_root, src_file)
                 src_img = ImageProcessor.load_image(src_path, target_size=(256, 256))
-                # Prepare tensors
-                src_clean_tensor = ensure_model_tensor(src_img, model.device)
-                tgt_clean_tensor = ensure_model_tensor(original, model.device)
-                tgt_adv_tensor = ensure_model_tensor(adversarial, model.device)
                 # Optionally attack source too
                 src_adv_img = src_img
                 attack_source = bool(config.get('experiment', {}).get('attack_source', False))
@@ -272,53 +269,94 @@ def run_single_attack(
                     m_src = compute_metrics(src_img, src_adv_img)
                     with open(os.path.join(output_path, 'metrics_source.json'), 'w') as f:
                         json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_src.items()}, f, indent=2)
-                src_adv_tensor = ensure_model_tensor(src_adv_img, model.device)
-                # 4-way swaps
-                swap_CC = model.swap(src_clean_tensor, tgt_clean_tensor, return_tensor=False)
-                swap_CA = model.swap(src_clean_tensor, tgt_adv_tensor,   return_tensor=False)
-                swap_AC = model.swap(src_adv_tensor,   tgt_clean_tensor, return_tensor=False)
-                swap_AA = model.swap(src_adv_tensor,   tgt_adv_tensor,   return_tensor=False)
-                import cv2
+                def load_full_rgb(path: str) -> np.ndarray:
+                    img_bgr = cv2.imread(path)
+                    if img_bgr is None:
+                        raise FileNotFoundError(path)
+                    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 
-                # Resize swap results to match original image size if needed
-                target_h, target_w = original.shape[:2]
-                def resize_if_needed(img):
-                    if img.shape[:2] != (target_h, target_w):
-                        return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-                    return img
+                # Extract source image ID from filename (handle both "2332.jpg" and "02332.jpg")
+                src_filename = os.path.basename(src_path)
+                src_id_from_file = int(os.path.splitext(src_filename)[0])
                 
-                swap_CC = resize_if_needed(swap_CC)
-                swap_CA = resize_if_needed(swap_CA)
-                swap_AC = resize_if_needed(swap_AC)
-                swap_AA = resize_if_needed(swap_AA)
+                # Load full-resolution images to get dimensions
+                src_img_full, tgt_img_full, _ = model.read_pair(src_id_from_file, image_id)
+                full_h, full_w = tgt_img_full.shape[:2]
+                src_h, src_w = src_img_full.shape[:2]
                 
-                # Save unified originals/adversarials
-                cv2.imwrite(os.path.join(output_path, 'source_clean.jpg'),  src_img[:, :, ::-1])
-                cv2.imwrite(os.path.join(output_path, 'target_clean.jpg'),  original[:, :, ::-1])
-                cv2.imwrite(os.path.join(output_path, 'target_adv.jpg'),    adversarial[:, :, ::-1])
+                # Upscale adversarial images to full resolution and save to disk
+                tgt_adv_full = cv2.resize(adversarial, (full_w, full_h), interpolation=cv2.INTER_LINEAR)
+                src_adv_full = cv2.resize(src_adv_img, (src_w, src_h), interpolation=cv2.INTER_LINEAR) if attack_source else src_img_full.copy()
+                
+                # Save full-resolution adversarial images to disk (handler.run() will load from disk)
+                src_adv_path = os.path.join(output_path, f'source_adv_{src_id_from_file}.jpg') if attack_source else None
+                tgt_adv_path = os.path.join(output_path, f'target_adv_{image_id}.jpg')
                 if attack_source:
-                    cv2.imwrite(os.path.join(output_path, 'source_adv.jpg'), src_adv_img[:, :, ::-1])
+                    cv2.imwrite(src_adv_path, src_adv_full[:, :, ::-1])  # BGR for OpenCV
+                cv2.imwrite(tgt_adv_path, tgt_adv_full[:, :, ::-1])  # BGR for OpenCV
+                
+                # Save full-resolution clean images for reference
+                cv2.imwrite(os.path.join(output_path, 'source_clean.jpg'),  src_img_full[:, :, ::-1])
+                cv2.imwrite(os.path.join(output_path, 'target_clean.jpg'),  tgt_img_full[:, :, ::-1])
+                cv2.imwrite(os.path.join(output_path, 'target_adv.jpg'),    tgt_adv_full[:, :, ::-1])
+                if attack_source:
+                    cv2.imwrite(os.path.join(output_path, 'source_adv.jpg'), src_adv_full[:, :, ::-1])
+                
+                # Use run_local.py via CLI - ensures 100% identical swap results
+                # Generate 4 swap cases: CC, CA, AC, AA
+                print(f"\n[INFO] Generating 4 swap cases using run_local.py...")
+                print(f"  CC: Clean Source + Clean Target")
+                swap_CC_full = get_swap_result_via_cli(config, src_id_from_file, image_id,
+                                                       src_adv_path=None, tgt_adv_path=None, refine=True, output_dir=output_path)
+                print(f"  CA: Clean Source + Adversarial Target")
+                swap_CA_full = get_swap_result_via_cli(config, src_id_from_file, image_id,
+                                                       src_adv_path=None, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_path)
+                if attack_source:
+                    print(f"  AC: Adversarial Source + Clean Target")
+                    swap_AC_full = get_swap_result_via_cli(config, src_id_from_file, image_id,
+                                                           src_adv_path=src_adv_path, tgt_adv_path=None, refine=True, output_dir=output_path)
+                    print(f"  AA: Adversarial Source + Adversarial Target")
+                    swap_AA_full = get_swap_result_via_cli(config, src_id_from_file, image_id,
+                                                           src_adv_path=src_adv_path, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_path)
+                else:
+                    swap_AC_full = None
+                    swap_AA_full = None
+                
+                # All images are already at full resolution (1024x1024)
+                # Save unified originals/adversarials at native resolution
+                cv2.imwrite(os.path.join(output_path, 'source_clean.jpg'),  src_img_full[:, :, ::-1])
+                cv2.imwrite(os.path.join(output_path, 'target_clean.jpg'),  tgt_img_full[:, :, ::-1])
+                cv2.imwrite(os.path.join(output_path, 'target_adv.jpg'),    tgt_adv_full[:, :, ::-1])
+                if attack_source:
+                    cv2.imwrite(os.path.join(output_path, 'source_adv.jpg'), src_adv_full[:, :, ::-1])
                 if full_compare:
                     # Save with simple names
-                    cv2.imwrite(os.path.join(output_path, 'swap_CC.jpg'), swap_CC[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_CA.jpg'), swap_CA[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_AC.jpg'), swap_AC[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_AA.jpg'), swap_AA[:, :, ::-1])
+                    cv2.imwrite(os.path.join(output_path, 'swap_CC.jpg'), swap_CC_full[:, :, ::-1])
+                    cv2.imwrite(os.path.join(output_path, 'swap_CA.jpg'), swap_CA_full[:, :, ::-1])
+                    if swap_AC_full is not None:
+                        cv2.imwrite(os.path.join(output_path, 'swap_AC.jpg'), swap_AC_full[:, :, ::-1])
+                    if swap_AA_full is not None:
+                        cv2.imwrite(os.path.join(output_path, 'swap_AA.jpg'), swap_AA_full[:, :, ::-1])
                     # Also save descriptive variants for clarity
-                    cv2.imwrite(os.path.join(output_path, 'swap_CC_(Clean_S_Clean_T).jpg'), swap_CC[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_CA_(Clean_S_Adv_T).jpg'),   swap_CA[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_AC_(Adv_S_Clean_T).jpg'),   swap_AC[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_AA_(Adv_S_Adv_T).jpg'),     swap_AA[:, :, ::-1])
-                    top = np.hstack([swap_CC, swap_CA])
-                    bottom = np.hstack([swap_AC, swap_AA])
-                    grid = np.vstack([top, bottom])
+                    cv2.imwrite(os.path.join(output_path, 'swap_CC_(Clean_S_Clean_T).jpg'), swap_CC_full[:, :, ::-1])
+                    cv2.imwrite(os.path.join(output_path, 'swap_CA_(Clean_S_Adv_T).jpg'),   swap_CA_full[:, :, ::-1])
+                    if swap_AC_full is not None:
+                        cv2.imwrite(os.path.join(output_path, 'swap_AC_(Adv_S_Clean_T).jpg'),   swap_AC_full[:, :, ::-1])
+                    if swap_AA_full is not None:
+                        cv2.imwrite(os.path.join(output_path, 'swap_AA_(Adv_S_Adv_T).jpg'),     swap_AA_full[:, :, ::-1])
+                    # Create grid (only include swaps that exist)
+                    top = np.hstack([swap_CC_full, swap_CA_full])
+                    if swap_AC_full is not None and swap_AA_full is not None:
+                        bottom = np.hstack([swap_AC_full, swap_AA_full])
+                        grid = np.vstack([top, bottom])
+                    else:
+                        grid = top  # Only top row if source wasn't attacked
                     cv2.imwrite(os.path.join(output_path, 'comparison_grid_ALL.jpg'), grid[:, :, ::-1])
                 else:
-                    cv2.imwrite(os.path.join(output_path, 'swap_on_original.jpg'),    swap_CC[:, :, ::-1])
-                    cv2.imwrite(os.path.join(output_path, 'swap_on_adversarial.jpg'), swap_CA[:, :, ::-1])
-                    swap_CC_resized = cv2.resize(swap_CC, (original.shape[1], original.shape[0]), interpolation=cv2.INTER_AREA)
-                    swap_CA_resized = cv2.resize(swap_CA, (original.shape[1], original.shape[0]), interpolation=cv2.INTER_AREA)
-                    comp = np.hstack([src_img, original, adversarial, swap_CC_resized, swap_CA_resized])
+                    cv2.imwrite(os.path.join(output_path, 'swap_on_original.jpg'),    swap_CC_full[:, :, ::-1])
+                    cv2.imwrite(os.path.join(output_path, 'swap_on_adversarial.jpg'), swap_CA_full[:, :, ::-1])
+                    # Create comparison grid with full-res images
+                    comp = np.hstack([src_img_full, tgt_img_full, tgt_adv_full, swap_CC_full, swap_CA_full])
                     cv2.imwrite(os.path.join(output_path, 'swap_comparison.jpg'), comp[:, :, ::-1])
                 # manifest & effective config
                 manifest = {
@@ -373,28 +411,133 @@ def run_single_attack(
         }
 
 
-# === MODULE-SCOPE ensure_model_tensor ===
-def ensure_model_tensor(img_input, device):
-    """Robustly convert to normalized model tensor (NCHW, float, on device)"""
-    from utils.image_utils import ImageProcessor
-    img_np = img_input
-    if isinstance(img_np, tuple):
-        img_np = img_np[0]
-    if isinstance(img_np, str):
-        img_np = ImageProcessor.load_image(img_np, target_size=(256, 256))
-    if isinstance(img_np, torch.Tensor):
-        t = img_np
-        if t.dim() == 3:
-            t = t.unsqueeze(0)
-        if t.dtype != torch.float32:
-            t = t.float()
-        t = t.to(device)
-        t = ImageProcessor.preprocess_for_model_tensor(t)
-    else:
-        t = torch.from_numpy(img_np.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-        t = ImageProcessor.preprocess_for_model_tensor(t)
-    assert isinstance(t, torch.Tensor), f"ensure_model_tensor failed: got type {type(t)}"
-    return t
+
+
+def get_swap_result_via_cli(config: Dict[str, Any], src_id: int, tgt_id: int, 
+                             src_adv_path: Optional[str] = None,
+                             tgt_adv_path: Optional[str] = None,
+                             refine: bool = True,
+                             output_dir: Optional[str] = None) -> np.ndarray:
+    """Get swap result by calling run_local.py via CLI.
+    
+    This function calls run_local.py as a subprocess to ensure 100% identical
+    swap results without any code duplication. The swap logic is entirely
+    handled by run_local.py.
+    
+    Args:
+        config: Attack configuration dict (for dataset paths)
+        src_id: Source image ID
+        tgt_id: Target image ID
+        src_adv_path: Optional path to adversarial source image (if None, uses original)
+        tgt_adv_path: Optional path to adversarial target image (if None, uses original)
+        refine: Whether to apply refinement (default: True)
+        output_dir: Optional directory to save intermediate results
+    
+    Returns:
+        Swapped face as numpy array (1024x1024 RGB, uint8)
+    """
+    import subprocess
+    
+    # Get paths from config
+    dataset_root = config['paths']['dataset_root']
+    weights_dir = config['paths']['checkpoint_dir']
+    # Try to get data_map from config, fallback to default location
+    data_map_path = config.get('paths', {}).get('data_map', None)
+    if data_map_path is None:
+        # Default location relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_map_path = os.path.join(project_root, 'data_map.json')
+    swap_type = config['model']['swap_type']
+    
+    # Build CLI command
+    run_local_script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'run_local.py')
+    
+    cmd = [
+        sys.executable,
+        run_local_script,
+        '--src-id', str(src_id),
+        '--tgt-id', str(tgt_id),
+        '--dataset-root', dataset_root,
+        '--weights-dir', weights_dir,
+        '--data-map', data_map_path,
+        '--swap-type', swap_type,
+    ]
+    
+    if not refine:
+        cmd.append('--no-refine')
+    
+    if output_dir:
+        cmd.extend(['--output-dir', output_dir])
+    
+    if src_adv_path:
+        cmd.extend(['--src-adv-path', os.path.abspath(src_adv_path)])
+    
+    if tgt_adv_path:
+        cmd.extend(['--tgt-adv-path', os.path.abspath(tgt_adv_path)])
+    
+    # Run subprocess
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        
+        # Parse output to find saved image path
+        # run_local.py prints: "[OK] Result saved to: <path>"
+        output_lines = result.stdout.split('\n')
+        result_path = None
+        for line in output_lines:
+            if '[OK] Result saved to:' in line or 'Result saved to:' in line:
+                # Extract path from line
+                parts = line.split('Result saved to:')
+                if len(parts) > 1:
+                    result_path = parts[1].strip()
+                    break
+        
+        if result_path is None:
+            # Fallback: construct expected path
+            if output_dir:
+                result_path = os.path.join(output_dir, f'swap_{src_id}_to_{tgt_id}_{swap_type}.jpg')
+            else:
+                result_path = os.path.join('./outputs', f'swap_{src_id}_to_{tgt_id}_{swap_type}.jpg')
+        
+        # Load the concatenated result image
+        if not os.path.exists(result_path):
+            raise FileNotFoundError(f"Swap result not found at: {result_path}")
+        
+        result_image = cv2.imread(result_path)
+        if result_image is None:
+            raise RuntimeError(f"Failed to load swap result from: {result_path}")
+        
+        # Convert BGR to RGB
+        result_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
+        
+        # Extract swapped result from concatenated output
+        # handler.run() returns: [source, target, swapped, (refined if refine=True)]
+        num_images = 4 if refine else 3
+        img_width = result_image.shape[1] // num_images
+        
+        # Extract the final swapped face
+        # If refine=True, extract the refined result (4th image), otherwise extract swapped (3rd image)
+        if refine:
+            # Refined result is the 4th image (index 3)
+            swapped_face = result_image[:, img_width * 3:img_width * 4]
+        else:
+            # Swapped result is the 3rd image (index 2)
+            swapped_face = result_image[:, img_width * 2:img_width * 3]
+        
+        return swapped_face
+        
+    except subprocess.CalledProcessError as e:
+        error_msg = f"run_local.py failed with return code {e.returncode}\n"
+        error_msg += f"STDOUT: {e.stdout}\n"
+        error_msg += f"STDERR: {e.stderr}"
+        raise RuntimeError(error_msg)
+    except Exception as e:
+        raise RuntimeError(f"Failed to get swap result via CLI: {e}")
 
 
 def run_pair_attack(
@@ -457,58 +600,60 @@ def run_pair_attack(
         detector_kwargs=detector_kwargs
     )
 
-    # Load clean images
+    # Load clean images at 256x256 for attack
     from utils.image_utils import ImageProcessor
-    src_clean = ImageProcessor.load_image(src_path, target_size=(256, 256))
-    tgt_clean = ImageProcessor.load_image(tgt_path, target_size=(256, 256))
+    src_clean_256 = ImageProcessor.load_image(src_path, target_size=(256, 256))
+    tgt_clean_256 = ImageProcessor.load_image(tgt_path, target_size=(256, 256))
 
-    # Attack target and source
-    tgt_adv = attack.attack(tgt_path, output_dir, output_prefix='target')
-    src_adv = attack.attack(src_path, output_dir, output_prefix='source')
+    # Attack target and source (generates 256x256 adversarial images)
+    tgt_adv_256 = attack.attack(tgt_path, output_dir, output_prefix='target')
+    src_adv_256 = attack.attack(src_path, output_dir, output_prefix='source')
 
-    # Compute and save metrics
-    m_tgt = compute_metrics(tgt_clean, tgt_adv)
-    m_src = compute_metrics(src_clean, src_adv)
+    # Compute and save metrics (using 256x256 images)
+    m_tgt = compute_metrics(tgt_clean_256, tgt_adv_256)
+    m_src = compute_metrics(src_clean_256, src_adv_256)
     with open(os.path.join(output_dir, 'metrics_target.json'), 'w') as f:
         json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_tgt.items()}, f, indent=2)
     with open(os.path.join(output_dir, 'metrics_source.json'), 'w') as f:
         json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_src.items()}, f, indent=2)
 
-    # Prepare tensors
-    src_clean_t = ensure_model_tensor(src_clean, model.device)
-    tgt_clean_t = ensure_model_tensor(tgt_clean, model.device)
-    src_adv_t   = ensure_model_tensor(src_adv,   model.device)
-    tgt_adv_t   = ensure_model_tensor(tgt_adv,   model.device)
-
-    # Optionally, add an explicit runtime assertion just before each swap:
-    for name, t in [('src_clean', src_clean_t), ('tgt_clean', tgt_clean_t), ('src_adv', src_adv_t), ('tgt_adv', tgt_adv_t)]:
-        print(f'[DEBUG] swap input {name}: type={type(t)}, shape={getattr(t, "shape", None)}')
-        assert isinstance(t, torch.Tensor), f"Swap input {name} is not torch.Tensor but {type(t)}"
-
-    # Swaps
-    swap_CC = model.swap(src_clean_t, tgt_clean_t, return_tensor=False)
-    swap_CA = model.swap(src_clean_t, tgt_adv_t,   return_tensor=False)
-    swap_AC = model.swap(src_adv_t,   tgt_clean_t, return_tensor=False)
-    swap_AA = model.swap(src_adv_t,   tgt_adv_t,   return_tensor=False)
-
-    # Resize swap results to match original image size if needed
-    import cv2
-    target_h, target_w = tgt_clean.shape[:2]
-    def resize_if_needed(img):
-        if img.shape[:2] != (target_h, target_w):
-            return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-        return img
+    # Load full-resolution clean images to get dimensions
+    src_clean_full, tgt_clean_full, _ = model.read_pair(src_id, tgt_id)
     
-    swap_CC = resize_if_needed(swap_CC)
-    swap_CA = resize_if_needed(swap_CA)
-    swap_AC = resize_if_needed(swap_AC)
-    swap_AA = resize_if_needed(swap_AA)
+    # Upscale adversarial images to full resolution and save to disk
+    import cv2
+    tgt_h, tgt_w = tgt_clean_full.shape[:2]
+    src_h, src_w = src_clean_full.shape[:2]
+    tgt_adv_full = cv2.resize(tgt_adv_256, (tgt_w, tgt_h), interpolation=cv2.INTER_LINEAR)
+    src_adv_full = cv2.resize(src_adv_256, (src_w, src_h), interpolation=cv2.INTER_LINEAR)
+    
+    # Save full-resolution adversarial images to disk (handler.run() will load from disk)
+    src_adv_path = os.path.join(output_dir, f'source_adv_{src_id}.jpg')
+    tgt_adv_path = os.path.join(output_dir, f'target_adv_{tgt_id}.jpg')
+    cv2.imwrite(src_adv_path, src_adv_full[:, :, ::-1])  # BGR for OpenCV
+    cv2.imwrite(tgt_adv_path, tgt_adv_full[:, :, ::-1])  # BGR for OpenCV
+    
+    # Save full-resolution clean images for reference
+    cv2.imwrite(os.path.join(output_dir, 'source_clean.jpg'),  src_clean_full[:, :, ::-1])
+    cv2.imwrite(os.path.join(output_dir, 'target_clean.jpg'),  tgt_clean_full[:, :, ::-1])
+    cv2.imwrite(os.path.join(output_dir, 'source_adv.jpg'),    src_adv_full[:, :, ::-1])
+    cv2.imwrite(os.path.join(output_dir, 'target_adv.jpg'),    tgt_adv_full[:, :, ::-1])
 
-    # Save raws
-    cv2.imwrite(os.path.join(output_dir, 'source_clean.jpg'),  src_clean[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'target_clean.jpg'),  tgt_clean[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'source_adv.jpg'),    src_adv[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'target_adv.jpg'),    tgt_adv[:, :, ::-1])
+    # Use run_local.py via CLI - ensures 100% identical swap results
+    # Generate 4 swap cases: CC, CA, AC, AA
+    print(f"\n[INFO] Generating 4 swap cases using run_local.py...")
+    print(f"  CC: Clean Source + Clean Target")
+    swap_CC = get_swap_result_via_cli(config, src_id, tgt_id, 
+                                      src_adv_path=None, tgt_adv_path=None, refine=True, output_dir=output_dir)
+    print(f"  CA: Clean Source + Adversarial Target")
+    swap_CA = get_swap_result_via_cli(config, src_id, tgt_id,
+                                      src_adv_path=None, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
+    print(f"  AC: Adversarial Source + Clean Target")
+    swap_AC = get_swap_result_via_cli(config, src_id, tgt_id,
+                                      src_adv_path=src_adv_path, tgt_adv_path=None, refine=True, output_dir=output_dir)
+    print(f"  AA: Adversarial Source + Adversarial Target")
+    swap_AA = get_swap_result_via_cli(config, src_id, tgt_id,
+                                      src_adv_path=src_adv_path, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
 
     # Save swaps simple names
     cv2.imwrite(os.path.join(output_dir, 'swap_CC.jpg'), swap_CC[:, :, ::-1])

@@ -278,6 +278,15 @@ class DualTargetPGDAttack:
         Raises:
             FaceDetectionError: If face detection fails validation and strict_detection=True
         """
+        # Reset history per attack
+        self.loss_history = {
+            'total': [],
+            'L_ID': [],
+            'L_SEM': [],
+            'cos_sim': [],
+            'eps_sat_pct': [],
+            'grad_norm': []
+        }
         # 1. Load and preprocess image
         image_np = ImageProcessor.load_image(image_path, target_size=(256, 256))
         image_np = ImageProcessor.apply_preprocessing(image_np, mode=self.preproc_mode)
