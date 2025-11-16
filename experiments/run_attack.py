@@ -199,6 +199,7 @@ def run_single_attack(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
+        lambda_sim=config.get('attack', {}).get('lambda_sim', 0.0),
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
@@ -213,7 +214,9 @@ def run_single_attack(
         min_bbox_area_ratio=validation_config.get('min_bbox_area_ratio', 0.01),
         max_bbox_area_ratio=validation_config.get('max_bbox_area_ratio', 0.95),
         min_bbox_size=validation_config.get('min_bbox_size', 20),
-        detector_kwargs=detector_kwargs
+        detector_kwargs=detector_kwargs,
+        sim_loss_type=config.get('attack', {}).get('sim_loss_type', 'mse'),
+        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7)
     )
     
     # Execute attack
@@ -583,6 +586,7 @@ def run_pair_attack(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
+        lambda_sim=config.get('attack', {}).get('lambda_sim', 0.0),
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
@@ -597,7 +601,9 @@ def run_pair_attack(
         min_bbox_area_ratio=validation_config.get('min_bbox_area_ratio', 0.01),
         max_bbox_area_ratio=validation_config.get('max_bbox_area_ratio', 0.95),
         min_bbox_size=validation_config.get('min_bbox_size', 20),
-        detector_kwargs=detector_kwargs
+        detector_kwargs=detector_kwargs,
+        sim_loss_type=config.get('attack', {}).get('sim_loss_type', 'mse'),
+        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7)
     )
 
     # Load clean images at 256x256 for attack

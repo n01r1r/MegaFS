@@ -165,7 +165,14 @@ class DualTargetPGDAttack:
     
     Implements:
     - L_ID: Minimize cosine similarity to destroy identity in face region (A1)
-    - L_SEM: Suppress background features to collapse semantics (A2)
+    - L_SEM: Semantic loss with multiple variants:
+        * 'self_collapse': Suppress background features to collapse semantics (original)
+        * 'structure_weakening': Directly target structure feature (f4) to weaken Generator input
+        * Other variants: 'l1_f4', 'self_collapse_mid', 'contrastive_bg', 'mse_f4'
+    - L_SIM: Similarity preservation loss to maintain visual similarity between clean and adversarial images
+    
+    The structure_weakening variant directly attacks the structure feature (f4) which is used as
+    the initial input to the Generator, making it more effective for disrupting face swap generation.
     """
     
     def __init__(
@@ -176,6 +183,7 @@ class DualTargetPGDAttack:
         num_iter: int = 100,
         lambda_1: float = 1.0,
         lambda_2: float = 1.0,
+        lambda_sim: float = 0.0,  # Similarity preservation weight (0 = disabled)
         device: str = 'cuda',
         verbose: bool = True,
         sem_variant: str = 'self_collapse',  # 'mse_f4', 'l1_f4', 'self_collapse' (default), 'self_collapse_mid', 'contrastive_bg'
@@ -190,7 +198,9 @@ class DualTargetPGDAttack:
         min_bbox_area_ratio: float = 0.01,
         max_bbox_area_ratio: float = 0.95,
         min_bbox_size: int = 20,
-        detector_kwargs: Optional[Dict[str, Any]] = None
+        detector_kwargs: Optional[Dict[str, Any]] = None,
+        sim_loss_type: str = 'mse',  # 'mse', 'l1', 'perceptual'
+        structure_weakening_factor: float = 0.7  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
     ):
         self.identity_extractor = identity_extractor
         self.epsilon = epsilon
@@ -198,6 +208,7 @@ class DualTargetPGDAttack:
         self.num_iter = num_iter
         self.lambda_1 = lambda_1
         self.lambda_2 = lambda_2
+        self.lambda_sim = float(lambda_sim)
         self.device = device
         self.verbose = verbose
         self.sem_variant = sem_variant
@@ -209,6 +220,8 @@ class DualTargetPGDAttack:
         self.min_bbox_area_ratio = min_bbox_area_ratio
         self.max_bbox_area_ratio = max_bbox_area_ratio
         self.min_bbox_size = min_bbox_size
+        self.sim_loss_type = sim_loss_type
+        self.structure_weakening_factor = float(structure_weakening_factor)
         
         # Initialize face detector
         detector_kwargs = detector_kwargs or {}
@@ -235,6 +248,7 @@ class DualTargetPGDAttack:
             'total': [],
             'L_ID': [],
             'L_SEM': [],
+            'L_sim': [],
             'cos_sim': [],
             'eps_sat_pct': [],
             'grad_norm': []
@@ -312,6 +326,12 @@ class DualTargetPGDAttack:
         with torch.no_grad():
             preprocessed_face = ImageProcessor.preprocess_for_model_tensor(image_tensor * M1)
             target_latents, target_f4_from_face = self.identity_extractor(preprocessed_face)
+            
+            # For structure_weakening variant, also extract clean structure from full image
+            # This is cached to avoid recomputation in each iteration
+            if self.sem_variant == 'structure_weakening':
+                clean_preprocessed = ImageProcessor.preprocess_for_model_tensor(image_tensor)
+                _, self._target_f4_full = self.identity_extractor(clean_preprocessed)
         
         # 4. Initialize perturbation
         delta = torch.zeros_like(image_tensor, requires_grad=True).to(self.device)
@@ -333,6 +353,7 @@ class DualTargetPGDAttack:
 
             L_ID_loss = torch.zeros(1, device=self.device)
             L_SEM_loss = torch.zeros(1, device=self.device)
+            L_sim_loss = torch.zeros(1, device=self.device)
             cos_sim = torch.zeros(1, device=self.device)
             last_grad_norm = 0.0
             
@@ -366,23 +387,35 @@ class DualTargetPGDAttack:
             # Semantic step (train mode)
             if lambda_2 > 0:
                 self.identity_extractor.train()
-                adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
-                adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
-                _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
                 
-                if self.sem_variant == 'l1_f4':
-                    L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
-                elif self.sem_variant == 'self_collapse':
-                    L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
-                elif self.sem_variant == 'self_collapse_mid':
-                    f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
-                    L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
-                elif self.sem_variant == 'contrastive_bg':
-                    margin = 0.2
-                    cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
-                    L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                if self.sem_variant == 'structure_weakening':
+                    # Structure weakening: Directly target structure feature from full image
+                    # This attacks the Generator's initial input, making it more effective
+                    adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
+                    adv_full_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
+                    _, adv_f4_full = self.identity_extractor(adv_full_preprocessed)
+                    
+                    # Structure weakening: weaken the structure feature
+                    L_SEM_loss = F.mse_loss(adv_f4_full, self._target_f4_full * self.structure_weakening_factor)
                 else:
-                    L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
+                    # Original background-only approaches
+                    adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
+                    adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
+                    _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
+                    
+                    if self.sem_variant == 'l1_f4':
+                        L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
+                    elif self.sem_variant == 'self_collapse':
+                        L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
+                    elif self.sem_variant == 'self_collapse_mid':
+                        f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
+                        L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
+                    elif self.sem_variant == 'contrastive_bg':
+                        margin = 0.2
+                        cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
+                        L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                    else:
+                        L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
                 
                 loss_sem = lambda_2 * L_SEM_loss
                 loss_sem.backward()
@@ -397,26 +430,73 @@ class DualTargetPGDAttack:
             else:
                 self.identity_extractor.train()
                 with torch.no_grad():
-                    adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
-                    adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
-                    _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
-                    if self.sem_variant == 'l1_f4':
-                        L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
-                    elif self.sem_variant == 'self_collapse':
-                        L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
-                    elif self.sem_variant == 'self_collapse_mid':
-                        f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
-                        L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
-                    elif self.sem_variant == 'contrastive_bg':
-                        margin = 0.2
-                        cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
-                        L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                    if self.sem_variant == 'structure_weakening':
+                        # Structure weakening: Directly target structure feature from full image
+                        adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
+                        adv_full_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
+                        _, adv_f4_full = self.identity_extractor(adv_full_preprocessed)
+                        L_SEM_loss = F.mse_loss(adv_f4_full, self._target_f4_full * self.structure_weakening_factor)
                     else:
-                        L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
+                        # Original background-only approaches
+                        adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
+                        adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
+                        _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
+                        if self.sem_variant == 'l1_f4':
+                            L_SEM_loss = F.l1_loss(adv_f4_from_bg, target_f4_from_face)
+                        elif self.sem_variant == 'self_collapse':
+                            L_SEM_loss = torch.mean(adv_f4_from_bg.pow(2))
+                        elif self.sem_variant == 'self_collapse_mid':
+                            f4_mid, f8_mid, f16_mid, f32_mid = self.identity_extractor.fpn(adv_bg_preprocessed)
+                            L_SEM_loss = torch.mean(f8_mid.pow(2)) + 0.5 * torch.mean(f16_mid.pow(2))
+                        elif self.sem_variant == 'contrastive_bg':
+                            margin = 0.2
+                            cos_bg_face = F.cosine_similarity(adv_f4_from_bg.flatten(1), target_f4_from_face.flatten(1)).mean()
+                            L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
+                        else:
+                            L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
             
             self.identity_extractor.eval()
             
-            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss)
+            # Similarity preservation loss
+            if self.lambda_sim > 0:
+                adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
+                
+                if self.sim_loss_type == 'mse':
+                    # Pixel-level MSE
+                    L_sim_loss = F.mse_loss(adv_image_full, image_tensor)
+                elif self.sim_loss_type == 'l1':
+                    # Pixel-level L1
+                    L_sim_loss = F.l1_loss(adv_image_full, image_tensor)
+                elif self.sim_loss_type == 'perceptual':
+                    # Perceptual loss using encoder features
+                    adv_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
+                    clean_preprocessed = ImageProcessor.preprocess_for_model_tensor(image_tensor)
+                    with torch.no_grad():
+                        _, clean_f4 = self.identity_extractor(clean_preprocessed)
+                    _, adv_f4 = self.identity_extractor(adv_preprocessed)
+                    L_sim_loss = F.mse_loss(adv_f4, clean_f4)
+                else:
+                    L_sim_loss = torch.zeros(1, device=self.device)
+                
+                # Add similarity loss to gradient (accumulate with existing gradients)
+                loss_sim = self.lambda_sim * L_sim_loss
+                loss_sim.backward(retain_graph=False)
+                # Gradient is accumulated in delta.grad
+            else:
+                L_sim_loss = torch.zeros(1, device=self.device)
+            
+            # Apply accumulated gradients from all losses
+            if delta.grad is not None:
+                grad = delta.grad.detach()
+                if self.clip_grad and self.clip_grad > 0:
+                    grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
+                normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
+                delta.data = delta.data - self.alpha * normalized_grad
+                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
+                delta.grad.zero_()
+                last_grad_norm = normalized_grad.abs().mean().item()
+            
+            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss)
             
             # Logging
             with torch.no_grad():
@@ -424,15 +504,17 @@ class DualTargetPGDAttack:
             self.loss_history['total'].append(float(total_loss.item()))
             self.loss_history['L_ID'].append(float(L_ID_loss.item()))
             self.loss_history['L_SEM'].append(float(L_SEM_loss.item()))
+            self.loss_history['L_sim'].append(float(L_sim_loss.item()))
             self.loss_history['cos_sim'].append(float(cos_sim.item()))
             self.loss_history['eps_sat_pct'].append(eps_sat)
             self.loss_history['grad_norm'].append(last_grad_norm)
             
             if self.verbose and (i % 20 == 0 or i == self.num_iter - 1):
+                sim_str = f", L_sim={L_sim_loss.item():.4f}" if self.lambda_sim > 0 else ""
                 print(
                     f"Iter {i:5d}: Total={total_loss.item():.4f}, "
                     f"L_ID={L_ID_loss.item():.4f} (cos={float(cos_sim.item()):.4f}), "
-                    f"L_SEM={L_SEM_loss.item():.4f}, eps_sat={eps_sat:.1f}%"
+                    f"L_SEM={L_SEM_loss.item():.4f}{sim_str}, eps_sat={eps_sat:.1f}%"
                 )
         
         # 6. Generate final adversarial image

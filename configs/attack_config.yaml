@@ -12,7 +12,10 @@ attack:
   # Loss weights (dual objectives)
   lambda_1: 4.0     # L_ID weight (identity destruction)
   lambda_2: 4.0     # L_SEM weight (semantic collapse) [raised to match lambda_1]
-  sem_variant: "self_collapse"  # L_SEM variant: 'mse_f4', 'l1_f4', 'self_collapse' (default), 'self_collapse_mid', 'contrastive_bg'
+  lambda_sim: 0.0   # L_SIM weight (similarity preservation, 0 = disabled)
+  sem_variant: "structure_weakening"  # L_SEM variant: 'self_collapse', 'structure_weakening', 'mse_f4', 'l1_f4', 'self_collapse_mid', 'contrastive_bg'
+  structure_weakening_factor: 0.7  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
+  sim_loss_type: "mse"  # L_SIM loss type: 'mse', 'l1', 'perceptual'
 
 mask_generation:
   method: "haar"  # Detector method: "haar"
