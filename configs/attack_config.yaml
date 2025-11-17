@@ -5,17 +5,18 @@ attack:
   type: "dual_target_pgd"
   
   # PGD hyperparameters
-  epsilon: 16.0     # L_inf constraint (per pixel perturbation) [increased from 8.0]
-  alpha: 2.0        # Step size for gradient descent [increased from 1.0]
-  num_iter: 50000   # Number of PGD iterations [reduced from 100K to 50K for testing]
+  epsilon: 8.0       # L_inf constraint (per pixel perturbation) [reduced from 16.0 for better visual quality]
+  alpha: 2.0        # Step size for gradient descent
+  num_iter: 300     # Number of PGD iterations [reduced from 50K, early stopping enabled]
   
-  # Loss weights (dual objectives)
+  # Loss weights
   lambda_1: 4.0     # L_ID weight (identity destruction)
-  lambda_2: 4.0     # L_SEM weight (semantic collapse) [raised to match lambda_1]
-  lambda_sim: 0.0   # L_SIM weight (similarity preservation, 0 = disabled)
-  sem_variant: "structure_weakening"  # L_SEM variant: 'self_collapse', 'structure_weakening', 'mse_f4', 'l1_f4', 'self_collapse_mid', 'contrastive_bg'
+  lambda_2: 0.0     # L_SEM weight (semantic collapse) [disabled to improve visual quality]
+  lambda_sim: 10.0  # L_SIM weight (similarity preservation) [enabled with LPIPS support]
+  lambda_tv: 0.01   # L_TV weight (Total Variation for smooth perturbations)
+  sem_variant: "structure_weakening"  # L_SEM variant (not used when lambda_2=0.0)
   structure_weakening_factor: 0.7  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
-  sim_loss_type: "mse"  # L_SIM loss type: 'mse', 'l1', 'perceptual'
+  sim_loss_type: "lpips"  # L_SIM loss type: 'mse', 'l1', 'perceptual', 'lpips' (recommended)
 
 mask_generation:
   method: "haar"  # Detector method: "haar"

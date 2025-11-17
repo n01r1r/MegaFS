@@ -1,4 +1,4 @@
-"""
+﻿"""
 Evaluation and visualization for adversarial attacks
 Compare clean vs adversarial face swapping results
 """
@@ -160,9 +160,12 @@ def evaluate_image_pair(
         num_iter=config['attack']['num_iter'],
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
+        lambda_sim=config['attack'].get('lambda_sim', 0.0),
+        lambda_tv=config['attack'].get('lambda_tv', 0.0),
         device=config['device'],
         verbose=False,
-        checkpoint_dir=config['paths']['checkpoint_dir']
+        checkpoint_dir=config['paths']['checkpoint_dir'],
+        sim_loss_type=config['attack'].get('sim_loss_type', 'mse')
     )
     
     adversarial = attack.attack(image_path, output_dir=None)

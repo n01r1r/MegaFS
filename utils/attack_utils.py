@@ -17,6 +17,29 @@ from .face_detectors import (
     HaarCascadeDetector
 )
 
+try:
+    from .metrics import PerceptualLoss
+    LPIPS_AVAILABLE = True
+except ImportError:
+    LPIPS_AVAILABLE = False
+    PerceptualLoss = None
+
+
+def total_variation_loss(img: torch.Tensor) -> torch.Tensor:
+    """
+    Compute Total Variation loss to encourage smooth perturbations.
+    
+    Args:
+        img: Image tensor [B, C, H, W]
+        
+    Returns:
+        TV loss scalar
+    """
+    b, c, h, w = img.shape
+    tv_h = torch.pow(img[:, :, 1:, :] - img[:, :, :-1, :], 2).sum()
+    tv_w = torch.pow(img[:, :, :, 1:] - img[:, :, :, :-1], 2).sum()
+    return (tv_h + tv_w) / (b * c * h * w)
+
 
 class FaceDetectionError(Exception):
     """Exception raised when face detection fails or doesn't meet validation criteria"""
@@ -165,14 +188,10 @@ class DualTargetPGDAttack:
     
     Implements:
     - L_ID: Minimize cosine similarity to destroy identity in face region (A1)
-    - L_SEM: Semantic loss with multiple variants:
-        * 'self_collapse': Suppress background features to collapse semantics (original)
-        * 'structure_weakening': Directly target structure feature (f4) to weaken Generator input
-        * Other variants: 'l1_f4', 'self_collapse_mid', 'contrastive_bg', 'mse_f4'
-    - L_SIM: Similarity preservation loss to maintain visual similarity between clean and adversarial images
+    - L_SIM: Similarity preservation loss (LPIPS/MSE/L1) to maintain visual similarity
+    - L_TV: Total Variation loss to encourage smooth perturbations
     
-    The structure_weakening variant directly attacks the structure feature (f4) which is used as
-    the initial input to the Generator, making it more effective for disrupting face swap generation.
+    Note: L_SEM has been removed to improve visual quality while maintaining attack effectiveness.
     """
     
     def __init__(
@@ -184,6 +203,7 @@ class DualTargetPGDAttack:
         lambda_1: float = 1.0,
         lambda_2: float = 1.0,
         lambda_sim: float = 0.0,  # Similarity preservation weight (0 = disabled)
+        lambda_tv: float = 0.01,  # Total Variation weight
         device: str = 'cuda',
         verbose: bool = True,
         sem_variant: str = 'self_collapse',  # 'mse_f4', 'l1_f4', 'self_collapse' (default), 'self_collapse_mid', 'contrastive_bg'
@@ -199,7 +219,7 @@ class DualTargetPGDAttack:
         max_bbox_area_ratio: float = 0.95,
         min_bbox_size: int = 20,
         detector_kwargs: Optional[Dict[str, Any]] = None,
-        sim_loss_type: str = 'mse',  # 'mse', 'l1', 'perceptual'
+        sim_loss_type: str = 'mse',  # 'mse', 'l1', 'perceptual', 'lpips'
         structure_weakening_factor: float = 0.7  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
     ):
         self.identity_extractor = identity_extractor
@@ -209,6 +229,7 @@ class DualTargetPGDAttack:
         self.lambda_1 = lambda_1
         self.lambda_2 = lambda_2
         self.lambda_sim = float(lambda_sim)
+        self.lambda_tv = float(lambda_tv)
         self.device = device
         self.verbose = verbose
         self.sem_variant = sem_variant
@@ -222,6 +243,14 @@ class DualTargetPGDAttack:
         self.min_bbox_size = min_bbox_size
         self.sim_loss_type = sim_loss_type
         self.structure_weakening_factor = float(structure_weakening_factor)
+        
+        # Initialize LPIPS model if needed
+        self.lpips_model = None
+        if self.sim_loss_type == 'lpips' and LPIPS_AVAILABLE and PerceptualLoss is not None:
+            use_gpu = (device == 'cuda' and torch.cuda.is_available())
+            self.lpips_model = PerceptualLoss(net='alex', use_gpu=use_gpu)
+            if use_gpu:
+                self.lpips_model = self.lpips_model.to(device)
         
         # Initialize face detector
         detector_kwargs = detector_kwargs or {}
@@ -249,9 +278,11 @@ class DualTargetPGDAttack:
             'L_ID': [],
             'L_SEM': [],
             'L_sim': [],
+            'L_TV': [],
             'cos_sim': [],
             'eps_sat_pct': [],
-            'grad_norm': []
+            'grad_norm': [],
+            'early_stopped': False
         }
     
     def generate_masks(
@@ -297,9 +328,12 @@ class DualTargetPGDAttack:
             'total': [],
             'L_ID': [],
             'L_SEM': [],
+            'L_sim': [],
+            'L_TV': [],
             'cos_sim': [],
             'eps_sat_pct': [],
-            'grad_norm': []
+            'grad_norm': [],
+            'early_stopped': False
         }
         # 1. Load and preprocess image
         image_np = ImageProcessor.load_image(image_path, target_size=(256, 256))
@@ -354,6 +388,7 @@ class DualTargetPGDAttack:
             L_ID_loss = torch.zeros(1, device=self.device)
             L_SEM_loss = torch.zeros(1, device=self.device)
             L_sim_loss = torch.zeros(1, device=self.device)
+            L_TV_loss = torch.zeros(1, device=self.device)
             cos_sim = torch.zeros(1, device=self.device)
             last_grad_norm = 0.0
             
@@ -467,6 +502,16 @@ class DualTargetPGDAttack:
                 elif self.sim_loss_type == 'l1':
                     # Pixel-level L1
                     L_sim_loss = F.l1_loss(adv_image_full, image_tensor)
+                elif self.sim_loss_type == 'lpips':
+                    # LPIPS perceptual loss
+                    if self.lpips_model is not None:
+                        # Convert to LPIPS format: [0, 255] -> [-1, 1]
+                        adv_lpips = (adv_image_full / 127.5) - 1.0
+                        orig_lpips = (image_tensor / 127.5) - 1.0
+                        L_sim_loss = self.lpips_model(adv_lpips, orig_lpips).mean()
+                    else:
+                        # Fallback to MSE if LPIPS not available
+                        L_sim_loss = F.mse_loss(adv_image_full, image_tensor)
                 elif self.sim_loss_type == 'perceptual':
                     # Perceptual loss using encoder features
                     adv_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
@@ -485,6 +530,15 @@ class DualTargetPGDAttack:
             else:
                 L_sim_loss = torch.zeros(1, device=self.device)
             
+            # Total Variation loss
+            if self.lambda_tv > 0:
+                adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
+                L_TV_loss = total_variation_loss(delta)
+                loss_tv = self.lambda_tv * L_TV_loss
+                loss_tv.backward(retain_graph=False)
+            else:
+                L_TV_loss = torch.zeros(1, device=self.device)
+            
             # Apply accumulated gradients from all losses
             if delta.grad is not None:
                 grad = delta.grad.detach()
@@ -496,7 +550,16 @@ class DualTargetPGDAttack:
                 delta.grad.zero_()
                 last_grad_norm = normalized_grad.abs().mean().item()
             
-            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss)
+            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss) + (self.lambda_tv * L_TV_loss)
+            
+            # Early stopping: check if L_ID < 0.2
+            early_stop = False
+            with torch.no_grad():
+                if L_ID_loss.item() < 0.2:
+                    early_stop = True
+                    if self.verbose:
+                        print(f"Early stopping at iter {i}: L_ID={L_ID_loss.item():.4f} < 0.2")
+                    self.loss_history['early_stopped'] = True
             
             # Logging
             with torch.no_grad():
@@ -505,17 +568,23 @@ class DualTargetPGDAttack:
             self.loss_history['L_ID'].append(float(L_ID_loss.item()))
             self.loss_history['L_SEM'].append(float(L_SEM_loss.item()))
             self.loss_history['L_sim'].append(float(L_sim_loss.item()))
+            self.loss_history['L_TV'].append(float(L_TV_loss.item()))
             self.loss_history['cos_sim'].append(float(cos_sim.item()))
             self.loss_history['eps_sat_pct'].append(eps_sat)
             self.loss_history['grad_norm'].append(last_grad_norm)
             
-            if self.verbose and (i % 20 == 0 or i == self.num_iter - 1):
+            if self.verbose and (i % 20 == 0 or i == self.num_iter - 1 or early_stop):
                 sim_str = f", L_sim={L_sim_loss.item():.4f}" if self.lambda_sim > 0 else ""
+                tv_str = f", L_TV={L_TV_loss.item():.4f}" if self.lambda_tv > 0 else ""
                 print(
                     f"Iter {i:5d}: Total={total_loss.item():.4f}, "
                     f"L_ID={L_ID_loss.item():.4f} (cos={float(cos_sim.item()):.4f}), "
-                    f"L_SEM={L_SEM_loss.item():.4f}{sim_str}, eps_sat={eps_sat:.1f}%"
+                    f"L_SEM={L_SEM_loss.item():.4f}{sim_str}{tv_str}, eps_sat={eps_sat:.1f}%"
                 )
+            
+            # Break if early stopping
+            if early_stop:
+                break
         
         # 6. Generate final adversarial image
         final_adv = torch.clamp(image_tensor + delta.detach(), 0, 255)
@@ -596,15 +665,15 @@ class DualTargetPGDAttack:
             axes[0,1].set_xlabel('Iteration')
             axes[0,1].set_ylabel('Loss')
             
-            axes[0,2].plot(self.loss_history['L_SEM'])
-            axes[0,2].set_title('L_SEM (Semantic Collapse)')
+            axes[0,2].plot(self.loss_history.get('L_sim', []))
+            axes[0,2].set_title('L_SIM (Similarity Preservation)')
             axes[0,2].set_xlabel('Iteration')
             axes[0,2].set_ylabel('Loss')
 
-            axes[1,0].plot(self.loss_history.get('cos_sim', []))
-            axes[1,0].set_title('Cosine Similarity (face latents)')
+            axes[1,0].plot(self.loss_history.get('L_TV', []))
+            axes[1,0].set_title('L_TV (Total Variation)')
             axes[1,0].set_xlabel('Iteration')
-            axes[1,0].set_ylabel('cos')
+            axes[1,0].set_ylabel('Loss')
 
             axes[1,1].plot(self.loss_history.get('eps_sat_pct', []))
             axes[1,1].set_title('Epsilon Saturation (%)')
@@ -615,6 +684,10 @@ class DualTargetPGDAttack:
             axes[1,2].set_title('Grad Norm (mean |grad|)')
             axes[1,2].set_xlabel('Iteration')
             axes[1,2].set_ylabel('value')
+            
+            # Add early stopping indicator if applicable
+            if self.loss_history.get('early_stopped', False):
+                fig.suptitle('Loss Curves (Early Stopped)', fontsize=14, fontweight='bold')
             
             plt.tight_layout()
             plt.savefig(save_path, dpi=100)

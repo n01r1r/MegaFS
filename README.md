@@ -265,7 +265,26 @@ statistics = evaluator.calculate_statistics(batch_results)
 
 ## Gradient-Based Experiments (NEW)
 
-The framework now supports gradient-based experiments for research purposes, including adversarial attacks:
+The framework now supports gradient-based experiments for research purposes, including adversarial attacks with improved visual quality.
+
+### Attack Loss Functions
+
+The adversarial attack implementation uses three loss components for imperceptible perturbations:
+
+1. **L_ID (Identity Destruction)**: Minimizes cosine similarity to destroy identity in face region
+2. **L_SIM (Similarity Preservation)**: Maintains visual similarity using LPIPS perceptual loss (recommended) or MSE/L1
+3. **L_TV (Total Variation)**: Encourages smooth perturbations by minimizing adjacent pixel differences
+
+**Total Loss = λ₁ × L_ID + λ_sim × L_SIM + λ_tv × L_TV**
+
+**Note**: L_SEM (Semantic Collapse) has been removed to improve visual quality while maintaining attack effectiveness.
+
+### Key Features
+
+- **LPIPS Support**: Perceptual similarity loss for better visual quality preservation
+- **Total Variation Loss**: Smooth perturbations without high-frequency noise
+- **Early Stopping**: Automatic termination when L_ID < 0.2 threshold is reached
+- **Optimized Hyperparameters**: Reduced iterations (300) and epsilon (8.0) for faster, cleaner attacks
 
 ### Enabling Gradients
 

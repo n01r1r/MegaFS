@@ -1,4 +1,4 @@
-"""
+﻿"""
 Adversarial attack runner for HieRFE dual-target strategy
 Execute attacks on CelebA-HQ images with configurable parameters
 """
@@ -103,6 +103,8 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
         # Apply job-specific overrides
         cfg['attack']['lambda_1'] = float(job_args['lambda_1'])
         cfg['attack']['lambda_2'] = float(job_args['lambda_2'])
+        cfg['attack']['lambda_sim'] = float(job_args['lambda_sim'])
+        cfg['attack']['lambda_tv'] = float(job_args['lambda_tv'])
         cfg['attack']['epsilon'] = float(job_args['epsilon'])
         cfg['attack']['num_iter'] = int(job_args['num_iter'])
 
@@ -117,12 +119,16 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
                 'success': False,
                 'lambda_1': job_args['lambda_1'],
                 'lambda_2': job_args['lambda_2'],
+                'lambda_sim': job_args['lambda_sim'],
+                'lambda_tv': job_args['lambda_tv'],
                 'epsilon': job_args['epsilon'],
                 'num_iter': job_args['num_iter']
             }
         res.update({
             'lambda_1': job_args['lambda_1'],
             'lambda_2': job_args['lambda_2'],
+            'lambda_sim': job_args['lambda_sim'],
+            'lambda_tv': job_args['lambda_tv'],
             'epsilon': job_args['epsilon'],
             'num_iter': job_args['num_iter']
         })
@@ -138,11 +144,13 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
 def _sweep_job_pair(job_tuple: tuple) -> Dict[str, Any]:
     """Top-level function for ProcessPoolExecutor pair sweep execution (pickle-safe)."""
     try:
-        src_id, tgt_id, l1, l2, eps, nit, config_json, base_output_dir = job_tuple
+        src_id, tgt_id, l1, l2, eps, nit, l_sim, l_tv, config_json, base_output_dir = job_tuple
         # Reconstruct config
         cfg = json.loads(config_json)
         cfg['attack']['lambda_1'] = float(l1)
         cfg['attack']['lambda_2'] = float(l2)
+        cfg['attack']['lambda_sim'] = float(l_sim)
+        cfg['attack']['lambda_tv'] = float(l_tv)
         cfg['attack']['epsilon'] = float(eps)
         cfg['attack']['num_iter'] = int(nit)
         # force full-compare behavior
@@ -200,6 +208,7 @@ def run_single_attack(
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
         lambda_sim=config.get('attack', {}).get('lambda_sim', 0.0),
+        lambda_tv=config.get('attack', {}).get('lambda_tv', 0.0),
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
@@ -587,6 +596,7 @@ def run_pair_attack(
         lambda_1=config['attack']['lambda_1'],
         lambda_2=config['attack']['lambda_2'],
         lambda_sim=config.get('attack', {}).get('lambda_sim', 0.0),
+        lambda_tv=config.get('attack', {}).get('lambda_tv', 0.0),
         device=config['device'],
         verbose=config['experiment']['verbose'],
         sem_variant=config.get('attack', {}).get('sem_variant', 'self_collapse'),
@@ -733,6 +743,8 @@ def main():
     parser.add_argument('--num_iter', type=int, default=None)
     parser.add_argument('--lambda_1', type=float, default=None)
     parser.add_argument('--lambda_2', type=float, default=None)
+    parser.add_argument('--lambda_sim', type=float, default=None)
+    parser.add_argument('--lambda_tv', type=float, default=None)
     parser.add_argument('--epsilon', type=float, default=None)
     parser.add_argument('--alpha', type=float, default=None,
                         help='Override PGD step size (default from config)')
@@ -742,6 +754,8 @@ def main():
     parser.add_argument('--num_iter_list', type=int, nargs='*', default=None)
     parser.add_argument('--lambda_1_list', type=float, nargs='*', default=None)
     parser.add_argument('--lambda_2_list', type=float, nargs='*', default=None)
+    parser.add_argument('--lambda_sim_list', type=float, nargs='*', default=None)
+    parser.add_argument('--lambda_tv_list', type=float, nargs='*', default=None)
     # Preprocessing and mask options
     parser.add_argument('--preproc', type=str, default=None, choices=['none','homo','homo_clahe'])
     parser.add_argument('--mask-edge-blur', type=int, default=None)
@@ -785,6 +799,10 @@ def main():
         config['attack']['lambda_1'] = args.lambda_1
     if args.lambda_2 is not None:
         config['attack']['lambda_2'] = args.lambda_2
+    if args.lambda_sim is not None:
+        config['attack']['lambda_sim'] = args.lambda_sim
+    if args.lambda_tv is not None:
+        config['attack']['lambda_tv'] = args.lambda_tv
     if args.epsilon is not None:
         config['attack']['epsilon'] = args.epsilon
     if args.alpha is not None:
@@ -823,6 +841,8 @@ def main():
             # Build parameter lists
             l1_list = args.lambda_1_list if args.lambda_1_list else [config['attack']['lambda_1']]
             l2_list = args.lambda_2_list if args.lambda_2_list else [config['attack']['lambda_2']]
+            lsim_list = args.lambda_sim_list if args.lambda_sim_list else [config['attack'].get('lambda_sim', 0.0)]
+            ltv_list = args.lambda_tv_list if args.lambda_tv_list else [config['attack'].get('lambda_tv', 0.0)]
             e_list  = args.epsilon_list if args.epsilon_list else [config['attack']['epsilon']]
             it_list = args.num_iter_list if args.num_iter_list else [config['attack']['num_iter']]
 
@@ -830,9 +850,11 @@ def main():
             for (src_id, tgt_id) in pairs:
                 for l1 in l1_list:
                     for l2 in l2_list:
-                        for eps in e_list:
-                            for nit in it_list:
-                                combos.append((src_id, tgt_id, l1, l2, eps, nit))
+                        for lsim in lsim_list:
+                            for ltv in ltv_list:
+                                for eps in e_list:
+                                    for nit in it_list:
+                                        combos.append((src_id, tgt_id, l1, l2, eps, nit, lsim, ltv))
 
             print(f"Scheduling {len(combos)} pair-sweep jobs (parallel={args.parallel})...")
             base_output_dir = config['experiment']['output_dir']
@@ -840,8 +862,8 @@ def main():
             results = []
 
             # Extend combos with config_json and base_output_dir for pickle-safe job runner
-            extended_combos = [(src_id, tgt_id, l1, l2, eps, nit, config_json, base_output_dir) 
-                               for (src_id, tgt_id, l1, l2, eps, nit) in combos]
+            extended_combos = [(src_id, tgt_id, l1, l2, eps, nit, lsim, ltv, config_json, base_output_dir) 
+                               for (src_id, tgt_id, l1, l2, eps, nit, lsim, ltv) in combos]
 
             from concurrent.futures import ProcessPoolExecutor, as_completed
             with ProcessPoolExecutor(max_workers=max(1, args.parallel)) as executor:
@@ -869,11 +891,13 @@ def main():
         # Build parameter lists (fallback to current config if list not provided)
         l1_list = args.lambda_1_list if args.lambda_1_list else [config['attack']['lambda_1']]
         l2_list = args.lambda_2_list if args.lambda_2_list else [config['attack']['lambda_2']]
+        lsim_list = args.lambda_sim_list if args.lambda_sim_list else [config['attack'].get('lambda_sim', 0.0)]
+        ltv_list = args.lambda_tv_list if args.lambda_tv_list else [config['attack'].get('lambda_tv', 0.0)]
         e_list = args.epsilon_list if args.epsilon_list else [config['attack']['epsilon']]
         it_list = args.num_iter_list if args.num_iter_list else [config['attack']['num_iter']]
 
         # Prepare jobs
-        combos = list(itertools.product(image_ids, l1_list, l2_list, e_list, it_list))
+        combos = list(itertools.product(image_ids, l1_list, l2_list, e_list, it_list, lsim_list, ltv_list))
         print(f"Scheduling {len(combos)} jobs (parallel={args.parallel})...")
 
         base_output_dir = output_dir
@@ -882,13 +906,15 @@ def main():
 
         with ProcessPoolExecutor(max_workers=max(1, args.parallel)) as executor:
             futures = []
-            for (jid, l1, l2, eps, nit) in combos:
+            for (jid, l1, l2, eps, nit, lsim, ltv) in combos:
                 job_args = {
                     'config_json': config_json,
                     'base_output_dir': base_output_dir,
                     'image_id': int(jid),
                     'lambda_1': float(l1),
                     'lambda_2': float(l2),
+                    'lambda_sim': float(lsim),
+                    'lambda_tv': float(ltv),
                     'epsilon': float(eps),
                     'num_iter': int(nit)
                 }
