@@ -23,6 +23,7 @@ from config import Config
 from models.megafs import MegaFS
 from utils.attack_utils import DualTargetPGDAttack, compute_metrics
 from utils.image_utils import ImageProcessor
+from experiments.evaluate_attack import evaluate_image_pair
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -107,6 +108,22 @@ def make_exp_dir(base_dir: str, cfg: Dict[str, Any]) -> str:
     edir = os.path.join(base_dir, exp_name)
     os.makedirs(edir, exist_ok=True)
     return edir
+
+
+def auto_evaluate_if_enabled(
+    config: Dict[str, Any],
+    model: MegaFS,
+    image_ids: List[int],
+    output_dir: str
+) -> None:
+    """Run evaluation pipeline if enabled in experiment settings."""
+    if not config.get('experiment', {}).get('auto_evaluate'):
+        return
+    for eid in image_ids:
+        try:
+            evaluate_image_pair(config, model, eid, output_dir)
+        except Exception as exc:
+            print(f"[WARN] Auto evaluation failed for image {eid}: {exc}")
 
 
 def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
@@ -420,6 +437,8 @@ def run_single_attack(
         except Exception as e:
             print(f"Warning: swap post-check failed: {e}")
         
+        auto_evaluate_if_enabled(config, model, [image_id], output_path)
+        
         return {
             'image_id': image_id,
             'metrics': metrics,
@@ -711,6 +730,8 @@ def run_pair_attack(
     }
     with open(os.path.join(output_dir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=2)
+    
+    auto_evaluate_if_enabled(config, model, [src_id, tgt_id], output_dir)
 
     return {'success': True, 'image_id': f'{src_id}->{tgt_id}', 'metrics': {'target': m_tgt, 'source': m_src}}
 
@@ -782,6 +803,7 @@ def main():
     parser.add_argument('--parallel', type=int, default=1, help='Max concurrent workers for sweep')
     parser.add_argument('--attack-source', action='store_true', help='Also attack the source image')
     parser.add_argument('--full-compare', action='store_true', help='Save 4-way swap results (CC, CA, AC, AA)')
+    parser.add_argument('--auto-eval', action='store_true', help='Run evaluation after each attack')
     # Pair mode controls
     parser.add_argument('--pair-mode', action='store_true', help='Run 4-way swap for provided pairs')
     parser.add_argument('--pairs', type=str, default=None, help='Comma-separated src:tgt pairs, e.g. "2332:428,2107:123"')
@@ -805,6 +827,8 @@ def main():
     attack_source_flag = bool(getattr(args, 'attack_source', False)) or full_compare_flag
     config['experiment']['attack_source'] = attack_source_flag
     config['experiment']['full_compare'] = full_compare_flag
+    auto_eval_flag = bool(getattr(args, 'auto_eval', False))
+    config['experiment']['auto_evaluate'] = auto_eval_flag
 
     # Apply single-value overrides (if provided)
     if args.num_iter is not None:
