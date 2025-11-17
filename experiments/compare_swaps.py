@@ -6,7 +6,7 @@ from typing import Dict, List
 
 import cv2
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
@@ -38,8 +38,22 @@ def compare_swaps(exp_dir: str) -> Dict[str, Dict[str, float]]:
     if not results:
         raise RuntimeError(f"No swap images found in {exp_dir}")
     out_path = os.path.join(exp_dir, "swap_comparison_metrics.json")
+
+    def _to_serializable(obj):
+        if isinstance(obj, (float, int, str)):
+            return obj
+        try:
+            return float(obj)
+        except Exception:
+            return obj
+
+    serializable_results = {
+        label: {k: _to_serializable(v) for k, v in metrics.items()}
+        for label, metrics in results.items()
+    }
+
     with open(out_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(serializable_results, f, indent=2)
     return results
 
 
