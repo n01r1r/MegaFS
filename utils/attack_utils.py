@@ -10,6 +10,22 @@ import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
 from pathlib import Path
 
+try:
+    from skimage.metrics import structural_similarity as skimage_ssim
+    _SSIM_AVAILABLE = True
+except ImportError:
+    skimage_ssim = None
+    _SSIM_AVAILABLE = False
+
+try:
+    import lpips
+    _LPIPS_AVAILABLE = True
+except ImportError:
+    lpips = None
+    _LPIPS_AVAILABLE = False
+
+_LPIPS_MODEL = None
+
 from .image_utils import ImageProcessor
 from models.hierfe import HieRFE
 from .face_detectors import (
@@ -276,7 +292,6 @@ class DualTargetPGDAttack:
         self.loss_history = {
             'total': [],
             'L_ID': [],
-            'L_SEM': [],
             'L_sim': [],
             'L_TV': [],
             'cos_sim': [],
@@ -327,7 +342,6 @@ class DualTargetPGDAttack:
         self.loss_history = {
             'total': [],
             'L_ID': [],
-            'L_SEM': [],
             'L_sim': [],
             'L_TV': [],
             'cos_sim': [],
@@ -566,7 +580,6 @@ class DualTargetPGDAttack:
                 eps_sat = (delta.abs() >= (self.epsilon - 1e-6)).float().mean().item() * 100.0
             self.loss_history['total'].append(float(total_loss.item()))
             self.loss_history['L_ID'].append(float(L_ID_loss.item()))
-            self.loss_history['L_SEM'].append(float(L_SEM_loss.item()))
             self.loss_history['L_sim'].append(float(L_sim_loss.item()))
             self.loss_history['L_TV'].append(float(L_TV_loss.item()))
             self.loss_history['cos_sim'].append(float(cos_sim.item()))
@@ -578,8 +591,8 @@ class DualTargetPGDAttack:
                 tv_str = f", L_TV={L_TV_loss.item():.4f}" if self.lambda_tv > 0 else ""
                 print(
                     f"Iter {i:5d}: Total={total_loss.item():.4f}, "
-                    f"L_ID={L_ID_loss.item():.4f} (cos={float(cos_sim.item()):.4f}), "
-                    f"L_SEM={L_SEM_loss.item():.4f}{sim_str}{tv_str}, eps_sat={eps_sat:.1f}%"
+                    f"L_ID={L_ID_loss.item():.4f} (cos={float(cos_sim.item()):.4f})"
+                    f"{sim_str}{tv_str}, eps_sat={eps_sat:.1f}%"
                 )
             
             # Break if early stopping
@@ -717,25 +730,32 @@ def compute_metrics(original: np.ndarray, adversarial: np.ndarray) -> Dict[str, 
     linf_norm = np.abs(adversarial.astype(np.float32) - original.astype(np.float32)).max()
     metrics['Linf_norm'] = linf_norm
     
-    # Perceptual metrics (if available)
-    try:
-        import lpips
-        from skimage.metrics import structural_similarity as ssim
-        
-        # SSIM
-        ssim_val = ssim(original, adversarial, multichannel=True, channel_axis=2)
-        metrics['SSIM'] = ssim_val
-        
-        # LPIPS (requires model initialization)
-        # Note: This is commented out to avoid requiring pretrained model on import
-        # lpips_model = lpips.LPIPS(net='alex')
-        # original_tensor = lpips.im2tensor(original)
-        # adv_tensor = lpips.im2tensor(adversarial)
-        # lpips_val = lpips_model.forward(original_tensor, adv_tensor).item()
-        # metrics['LPIPS'] = lpips_val
-        
-    except ImportError:
-        pass
+    # SSIM (if available)
+    if _SSIM_AVAILABLE and skimage_ssim is not None:
+        try:
+            ssim_val = skimage_ssim(original, adversarial, channel_axis=2)
+            metrics['SSIM'] = float(ssim_val)
+        except Exception:
+            pass
+    
+    # LPIPS (if available)
+    if _LPIPS_AVAILABLE:
+        global _LPIPS_MODEL
+        try:
+            if _LPIPS_MODEL is None:
+                _LPIPS_MODEL = lpips.LPIPS(net='alex')
+            # Convert numpy images [H,W,3] in 0-255 to torch [-1,1]
+            def _to_lpips_tensor(img: np.ndarray) -> torch.Tensor:
+                tensor = torch.from_numpy(img.transpose(2, 0, 1)).unsqueeze(0).float()
+                tensor = tensor / 127.5 - 1.0
+                return tensor
+            orig_tensor = _to_lpips_tensor(original)
+            adv_tensor = _to_lpips_tensor(adversarial)
+            with torch.no_grad():
+                lpips_val = _LPIPS_MODEL(orig_tensor, adv_tensor).item()
+            metrics['LPIPS'] = float(lpips_val)
+        except Exception:
+            pass
     
     return metrics
 

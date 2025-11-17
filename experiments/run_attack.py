@@ -71,25 +71,39 @@ def _format_val(val: float) -> str:
     return str(as_float).replace('.', 'p')
 
 
+def _format_attack_dirname(cfg: Dict[str, Any], prefix: str = "") -> str:
+    """Generate a directory name that captures all relevant attack hyperparameters."""
+    attack_cfg = cfg['attack']
+    parts = []
+    if prefix:
+        parts.append(prefix)
+    parts.extend([
+        f"l1_{_format_val(attack_cfg.get('lambda_1', 0.0))}",
+        f"l2_{_format_val(attack_cfg.get('lambda_2', 0.0))}",
+        f"lsim_{_format_val(attack_cfg.get('lambda_sim', 0.0))}",
+        f"ltv_{_format_val(attack_cfg.get('lambda_tv', 0.0))}",
+        f"e_{_format_val(attack_cfg.get('epsilon', 0.0))}",
+        f"iter_{int(attack_cfg.get('num_iter', 0))}",
+    ])
+    alpha = attack_cfg.get('alpha')
+    if alpha is not None:
+        parts.append(f"a_{_format_val(alpha)}")
+    sem_variant = attack_cfg.get('sem_variant')
+    if sem_variant:
+        parts.append(f"sem_{sem_variant}")
+    return "_".join(parts)
+
+
 def make_exp_output_dir(base_dir: str, cfg: Dict[str, Any], image_id: int) -> str:
     """Create and return a flat output directory for a given config and image id."""
-    exp_name = (
-        f"{int(image_id):05d}"
-        f"_l1_{_format_val(cfg['attack']['lambda_1'])}"
-        f"_l2_{_format_val(cfg['attack']['lambda_2'])}"
-        f"_e_{_format_val(cfg['attack']['epsilon'])}"
-    )
+    exp_name = _format_attack_dirname(cfg, prefix=f"{int(image_id):05d}")
     odir = os.path.join(base_dir, exp_name)
     os.makedirs(odir, exist_ok=True)
     return odir
 
 def make_exp_dir(base_dir: str, cfg: Dict[str, Any]) -> str:
     """Create and return experiment directory without image subfolder."""
-    exp_name = (
-        f"exp_l1_{cfg['attack']['lambda_1']}_"
-        f"l2_{cfg['attack']['lambda_2']}_"
-        f"e_{cfg['attack']['epsilon']}"
-    )
+    exp_name = f"exp_{_format_attack_dirname(cfg)}"
     edir = os.path.join(base_dir, exp_name)
     os.makedirs(edir, exist_ok=True)
     return edir
