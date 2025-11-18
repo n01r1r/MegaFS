@@ -662,15 +662,28 @@ def run_pair_attack(
     src_clean_256 = ImageProcessor.load_image(src_path, target_size=(256, 256))
     tgt_clean_256 = ImageProcessor.load_image(tgt_path, target_size=(256, 256))
 
-    # Attack target and source (generates 256x256 adversarial images)
-    tgt_adv_256 = attack.attack(tgt_path, output_dir, output_prefix='target')
+    # Attack source only (or both if attack_target is enabled)
+    attack_source_only = config.get('experiment', {}).get('attack_source_only', True)
+    attack_target = config.get('experiment', {}).get('attack_target', False)
+    
+    if attack_target:
+        # Attack target (generates 256x256 adversarial images)
+        tgt_adv_256 = attack.attack(tgt_path, output_dir, output_prefix='target')
+    else:
+        # Use clean target image
+        tgt_adv_256 = tgt_clean_256.copy()
+    
+    # Always attack source
     src_adv_256 = attack.attack(src_path, output_dir, output_prefix='source')
 
     # Compute and save metrics (using 256x256 images)
-    m_tgt = compute_metrics(tgt_clean_256, tgt_adv_256)
+    if attack_target:
+        m_tgt = compute_metrics(tgt_clean_256, tgt_adv_256)
+        with open(os.path.join(output_dir, 'metrics_target.json'), 'w') as f:
+            json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_tgt.items()}, f, indent=2)
+    else:
+        m_tgt = None
     m_src = compute_metrics(src_clean_256, src_adv_256)
-    with open(os.path.join(output_dir, 'metrics_target.json'), 'w') as f:
-        json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_tgt.items()}, f, indent=2)
     with open(os.path.join(output_dir, 'metrics_source.json'), 'w') as f:
         json.dump({k: (float(v) if hasattr(v, 'item') else float(v)) for k, v in m_src.items()}, f, indent=2)
 
@@ -681,47 +694,68 @@ def run_pair_attack(
     import cv2
     tgt_h, tgt_w = tgt_clean_full.shape[:2]
     src_h, src_w = src_clean_full.shape[:2]
-    tgt_adv_full = cv2.resize(tgt_adv_256, (tgt_w, tgt_h), interpolation=cv2.INTER_LINEAR)
+    if attack_target:
+        tgt_adv_full = cv2.resize(tgt_adv_256, (tgt_w, tgt_h), interpolation=cv2.INTER_LINEAR)
+    else:
+        tgt_adv_full = tgt_clean_full.copy()
     src_adv_full = cv2.resize(src_adv_256, (src_w, src_h), interpolation=cv2.INTER_LINEAR)
     
     # Save full-resolution adversarial images to disk (handler.run() will load from disk)
     src_adv_path = os.path.join(output_dir, f'source_adv_{src_id}.jpg')
-    tgt_adv_path = os.path.join(output_dir, f'target_adv_{tgt_id}.jpg')
+    tgt_adv_path = os.path.join(output_dir, f'target_adv_{tgt_id}.jpg') if attack_target else None
     cv2.imwrite(src_adv_path, src_adv_full[:, :, ::-1])  # BGR for OpenCV
-    cv2.imwrite(tgt_adv_path, tgt_adv_full[:, :, ::-1])  # BGR for OpenCV
+    if attack_target:
+        cv2.imwrite(tgt_adv_path, tgt_adv_full[:, :, ::-1])  # BGR for OpenCV
     
     # Save full-resolution clean images for reference
     cv2.imwrite(os.path.join(output_dir, 'source_clean.jpg'),  src_clean_full[:, :, ::-1])
     cv2.imwrite(os.path.join(output_dir, 'target_clean.jpg'),  tgt_clean_full[:, :, ::-1])
     cv2.imwrite(os.path.join(output_dir, 'source_adv.jpg'),    src_adv_full[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'target_adv.jpg'),    tgt_adv_full[:, :, ::-1])
+    if attack_target:
+        cv2.imwrite(os.path.join(output_dir, 'target_adv.jpg'),    tgt_adv_full[:, :, ::-1])
 
     # Use run_local.py via CLI - ensures 100% identical swap results
-    # Generate 4 swap cases: CC, CA, AC, AA
-    print(f"\n[INFO] Generating 4 swap cases using run_local.py...")
-    print(f"  CC: Clean Source + Clean Target")
-    swap_CC = get_swap_result_via_cli(config, src_id, tgt_id, 
-                                      src_adv_path=None, tgt_adv_path=None, refine=True, output_dir=output_dir)
-    print(f"  CA: Clean Source + Adversarial Target")
-    swap_CA = get_swap_result_via_cli(config, src_id, tgt_id,
-                                      src_adv_path=None, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
-    print(f"  AC: Adversarial Source + Clean Target")
-    swap_AC = get_swap_result_via_cli(config, src_id, tgt_id,
-                                      src_adv_path=src_adv_path, tgt_adv_path=None, refine=True, output_dir=output_dir)
-    print(f"  AA: Adversarial Source + Adversarial Target")
-    swap_AA = get_swap_result_via_cli(config, src_id, tgt_id,
-                                      src_adv_path=src_adv_path, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
-
-    # Save swaps simple names
-    cv2.imwrite(os.path.join(output_dir, 'swap_CC.jpg'), swap_CC[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'swap_CA.jpg'), swap_CA[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'swap_AC.jpg'), swap_AC[:, :, ::-1])
-    cv2.imwrite(os.path.join(output_dir, 'swap_AA.jpg'), swap_AA[:, :, ::-1])
-    # Grid
-    top = np.hstack([swap_CC, swap_CA])
-    bottom = np.hstack([swap_AC, swap_AA])
-    grid = np.vstack([top, bottom])
-    cv2.imwrite(os.path.join(output_dir, 'comparison_grid_ALL.jpg'), grid[:, :, ::-1])
+    # Generate swap cases based on attack configuration
+    if attack_target:
+        # Generate 4 swap cases: CC, CA, AC, AA
+        print(f"\n[INFO] Generating 4 swap cases using run_local.py...")
+        print(f"  CC: Clean Source + Clean Target")
+        swap_CC = get_swap_result_via_cli(config, src_id, tgt_id, 
+                                          src_adv_path=None, tgt_adv_path=None, refine=True, output_dir=output_dir)
+        print(f"  CA: Clean Source + Adversarial Target")
+        swap_CA = get_swap_result_via_cli(config, src_id, tgt_id,
+                                          src_adv_path=None, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
+        print(f"  AC: Adversarial Source + Clean Target")
+        swap_AC = get_swap_result_via_cli(config, src_id, tgt_id,
+                                          src_adv_path=src_adv_path, tgt_adv_path=None, refine=True, output_dir=output_dir)
+        print(f"  AA: Adversarial Source + Adversarial Target")
+        swap_AA = get_swap_result_via_cli(config, src_id, tgt_id,
+                                          src_adv_path=src_adv_path, tgt_adv_path=tgt_adv_path, refine=True, output_dir=output_dir)
+        # Save swaps simple names
+        cv2.imwrite(os.path.join(output_dir, 'swap_CC.jpg'), swap_CC[:, :, ::-1])
+        cv2.imwrite(os.path.join(output_dir, 'swap_CA.jpg'), swap_CA[:, :, ::-1])
+        cv2.imwrite(os.path.join(output_dir, 'swap_AC.jpg'), swap_AC[:, :, ::-1])
+        cv2.imwrite(os.path.join(output_dir, 'swap_AA.jpg'), swap_AA[:, :, ::-1])
+        # Grid
+        top = np.hstack([swap_CC, swap_CA])
+        bottom = np.hstack([swap_AC, swap_AA])
+        grid = np.vstack([top, bottom])
+        cv2.imwrite(os.path.join(output_dir, 'comparison_grid_ALL.jpg'), grid[:, :, ::-1])
+    else:
+        # Generate 2 swap cases: CC, AC (source only attack)
+        print(f"\n[INFO] Generating 2 swap cases using run_local.py (source only attack)...")
+        print(f"  CC: Clean Source + Clean Target")
+        swap_CC = get_swap_result_via_cli(config, src_id, tgt_id, 
+                                          src_adv_path=None, tgt_adv_path=None, refine=True, output_dir=output_dir)
+        print(f"  AC: Adversarial Source + Clean Target")
+        swap_AC = get_swap_result_via_cli(config, src_id, tgt_id,
+                                          src_adv_path=src_adv_path, tgt_adv_path=None, refine=True, output_dir=output_dir)
+        # Save swaps simple names
+        cv2.imwrite(os.path.join(output_dir, 'swap_CC.jpg'), swap_CC[:, :, ::-1])
+        cv2.imwrite(os.path.join(output_dir, 'swap_AC.jpg'), swap_AC[:, :, ::-1])
+        # Grid (2 cases side by side)
+        grid = np.hstack([swap_CC, swap_AC])
+        cv2.imwrite(os.path.join(output_dir, 'comparison_grid_ALL.jpg'), grid[:, :, ::-1])
 
     # Save manifests
     with open(os.path.join(output_dir, 'effective_config.json'), 'w') as f:
@@ -734,14 +768,14 @@ def run_pair_attack(
             'epsilon':   config['attack']['epsilon'],
             'num_iter':  config['attack']['num_iter']
         },
-        'swaps': {'CC': 'swap_CC.jpg', 'CA': 'swap_CA.jpg', 'AC': 'swap_AC.jpg', 'AA': 'swap_AA.jpg'}
+        'swaps': {'CC': 'swap_CC.jpg', 'AC': 'swap_AC.jpg'} if not attack_target else {'CC': 'swap_CC.jpg', 'CA': 'swap_CA.jpg', 'AC': 'swap_AC.jpg', 'AA': 'swap_AA.jpg'}
     }
     with open(os.path.join(output_dir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=2)
     
     auto_evaluate_if_enabled(config, model, [src_id, tgt_id], output_dir)
 
-    return {'success': True, 'image_id': f'{src_id}->{tgt_id}', 'metrics': {'target': m_tgt, 'source': m_src}}
+    return {'success': True, 'image_id': f'{src_id}->{tgt_id}', 'metrics': {'target': m_tgt, 'source': m_src} if attack_target else {'source': m_src}}
 
 
 def run_batch_attack(
@@ -810,7 +844,8 @@ def main():
     parser.add_argument('--no-early-stop', action='store_true', help='Disable early stopping (run full num_iter)')
     parser.add_argument('--epsilon_list', type=float, nargs='*', default=None)
     parser.add_argument('--parallel', type=int, default=1, help='Max concurrent workers for sweep')
-    parser.add_argument('--attack-source', action='store_true', help='Also attack the source image')
+    parser.add_argument('--attack-source', action='store_true', help='Also attack the source image (deprecated, source is always attacked)')
+    parser.add_argument('--attack-target', action='store_true', help='Attack target image (default: source only)')
     parser.add_argument('--full-compare', action='store_true', help='Save 4-way swap results (CC, CA, AC, AA)')
     parser.add_argument('--auto-eval', action='store_true', help='Run evaluation after each attack')
     # Pair mode controls
@@ -833,8 +868,9 @@ def main():
     # Persist flags into config for downstream use (including in workers)
     config.setdefault('experiment', {})
     full_compare_flag = bool(getattr(args, 'full_compare', False))
-    attack_source_flag = bool(getattr(args, 'attack_source', False)) or full_compare_flag
-    config['experiment']['attack_source'] = attack_source_flag
+    attack_target_flag = bool(getattr(args, 'attack_target', False)) or full_compare_flag
+    config['experiment']['attack_target'] = attack_target_flag
+    config['experiment']['attack_source_only'] = not attack_target_flag  # Source only by default
     config['experiment']['full_compare'] = full_compare_flag
     auto_eval_flag = bool(getattr(args, 'auto_eval', False))
     config['experiment']['auto_evaluate'] = auto_eval_flag
