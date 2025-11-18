@@ -256,7 +256,11 @@ def run_single_attack(
         min_bbox_size=validation_config.get('min_bbox_size', 20),
         detector_kwargs=detector_kwargs,
         sim_loss_type=config.get('attack', {}).get('sim_loss_type', 'mse'),
-        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7)
+        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7),
+        early_stop_threshold=config.get('attack', {}).get('early_stop_threshold', 0.2),
+        convergence_window=config.get('attack', {}).get('convergence_window', 1000),
+        convergence_tolerance=config.get('attack', {}).get('convergence_tolerance', 1e-6),
+        min_iter_for_convergence=config.get('attack', {}).get('min_iter_for_convergence', 1000)
     )
     
     # Execute attack
@@ -646,7 +650,11 @@ def run_pair_attack(
         min_bbox_size=validation_config.get('min_bbox_size', 20),
         detector_kwargs=detector_kwargs,
         sim_loss_type=config.get('attack', {}).get('sim_loss_type', 'mse'),
-        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7)
+        structure_weakening_factor=config.get('attack', {}).get('structure_weakening_factor', 0.7),
+        early_stop_threshold=config.get('attack', {}).get('early_stop_threshold', 0.2),
+        convergence_window=config.get('attack', {}).get('convergence_window', 1000),
+        convergence_tolerance=config.get('attack', {}).get('convergence_tolerance', 1e-6),
+        min_iter_for_convergence=config.get('attack', {}).get('min_iter_for_convergence', 1000)
     )
 
     # Load clean images at 256x256 for attack
@@ -799,6 +807,7 @@ def main():
                         choices=['mse_f4','l1_f4','self_collapse','self_collapse_mid','contrastive_bg'])
     parser.add_argument('--loss-schedule', action='store_true')
     parser.add_argument('--clip-grad', type=float, default=None)
+    parser.add_argument('--no-early-stop', action='store_true', help='Disable early stopping (run full num_iter)')
     parser.add_argument('--epsilon_list', type=float, nargs='*', default=None)
     parser.add_argument('--parallel', type=int, default=1, help='Max concurrent workers for sweep')
     parser.add_argument('--attack-source', action='store_true', help='Also attack the source image')
@@ -860,6 +869,9 @@ def main():
     if args.clip_grad is not None:
         config.setdefault('attack', {})
         config['attack']['clip_grad'] = float(args.clip_grad)
+    if args.no_early_stop:
+        config.setdefault('attack', {})
+        config['attack']['early_stop_threshold'] = None
 
     # Sweep mode
     if args.sweep:

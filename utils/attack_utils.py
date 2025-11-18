@@ -236,7 +236,11 @@ class DualTargetPGDAttack:
         min_bbox_size: int = 20,
         detector_kwargs: Optional[Dict[str, Any]] = None,
         sim_loss_type: str = 'mse',  # 'mse', 'l1', 'perceptual', 'lpips'
-        structure_weakening_factor: float = 0.7  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
+        structure_weakening_factor: float = 0.7,  # Structure weakening factor for 'structure_weakening' variant (0.0-1.0)
+        early_stop_threshold: Optional[float] = 0.2,  # Early stopping threshold (L_ID < threshold). Set to None to disable.
+        convergence_window: int = 1000,  # Number of recent iterations to check for convergence
+        convergence_tolerance: float = 1e-6,  # Loss change tolerance for convergence detection
+        min_iter_for_convergence: int = 1000  # Minimum iterations before checking convergence
     ):
         self.identity_extractor = identity_extractor
         self.epsilon = epsilon
@@ -259,6 +263,10 @@ class DualTargetPGDAttack:
         self.min_bbox_size = min_bbox_size
         self.sim_loss_type = sim_loss_type
         self.structure_weakening_factor = float(structure_weakening_factor)
+        self.early_stop_threshold = early_stop_threshold
+        self.convergence_window = int(convergence_window)
+        self.convergence_tolerance = float(convergence_tolerance)
+        self.min_iter_for_convergence = int(min_iter_for_convergence)
         
         # Initialize LPIPS model if needed
         self.lpips_model = None
@@ -566,14 +574,21 @@ class DualTargetPGDAttack:
             
             total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss) + (self.lambda_tv * L_TV_loss)
             
-            # Early stopping: check if L_ID < 0.2
+            # Early stopping: check convergence based on loss change (only)
             early_stop = False
-            with torch.no_grad():
-                if L_ID_loss.item() < 0.2:
-                    early_stop = True
-                    if self.verbose:
-                        print(f"Early stopping at iter {i}: L_ID={L_ID_loss.item():.4f} < 0.2")
-                    self.loss_history['early_stopped'] = True
+            if i >= self.min_iter_for_convergence:
+                # Check convergence based on loss history
+                if len(self.loss_history['L_ID']) >= self.convergence_window:
+                    # Get recent L_ID losses
+                    recent_losses = self.loss_history['L_ID'][-self.convergence_window:]
+                    # Calculate loss change over the window
+                    loss_change = abs(recent_losses[-1] - recent_losses[0])
+                    # Check if loss has converged (change is below tolerance)
+                    if loss_change < self.convergence_tolerance:
+                        early_stop = True
+                        if self.verbose:
+                            print(f"Early stopping at iter {i}: Convergence detected (L_ID change={loss_change:.6f} < {self.convergence_tolerance} over {self.convergence_window} iterations)")
+                        self.loss_history['early_stopped'] = True
             
             # Logging
             with torch.no_grad():
