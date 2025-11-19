@@ -175,7 +175,7 @@ def _sweep_job(job_args: Dict[str, Any]) -> Dict[str, Any]:
 def _sweep_job_pair(job_tuple: tuple) -> Dict[str, Any]:
     """Top-level function for ProcessPoolExecutor pair sweep execution (pickle-safe)."""
     try:
-        src_id, tgt_id, l1, l2, eps, nit, l_sim, l_tv, config_json, base_output_dir = job_tuple
+        src_id, tgt_id, l1, l2, eps, nit, l_sim, l_tv, alpha_val, config_json, base_output_dir = job_tuple
         # Reconstruct config
         cfg = json.loads(config_json)
         cfg['attack']['lambda_1'] = float(l1)
@@ -184,6 +184,7 @@ def _sweep_job_pair(job_tuple: tuple) -> Dict[str, Any]:
         cfg['attack']['lambda_tv'] = float(l_tv)
         cfg['attack']['epsilon'] = float(eps)
         cfg['attack']['num_iter'] = int(nit)
+        cfg['attack']['alpha'] = float(alpha_val)
         # force full-compare behavior
         cfg.setdefault('experiment', {})
         cfg['experiment']['attack_source'] = True
@@ -843,6 +844,7 @@ def main():
     parser.add_argument('--clip-grad', type=float, default=None)
     parser.add_argument('--no-early-stop', action='store_true', help='Disable early stopping (run full num_iter)')
     parser.add_argument('--epsilon_list', type=float, nargs='*', default=None)
+    parser.add_argument('--alpha_list', type=float, nargs='*', default=None, help='List of alpha values for sweep mode')
     parser.add_argument('--parallel', type=int, default=1, help='Max concurrent workers for sweep')
     parser.add_argument('--attack-source', action='store_true', help='Also attack the source image (deprecated, source is always attacked)')
     parser.add_argument('--attack-target', action='store_true', help='Attack target image (default: source only)')
@@ -931,6 +933,7 @@ def main():
             ltv_list = args.lambda_tv_list if args.lambda_tv_list else [config['attack'].get('lambda_tv', 0.0)]
             e_list  = args.epsilon_list if args.epsilon_list else [config['attack']['epsilon']]
             it_list = args.num_iter_list if args.num_iter_list else [config['attack']['num_iter']]
+            alpha_list = args.alpha_list if args.alpha_list else [config['attack'].get('alpha', 2.0)]
 
             combos = []
             for (src_id, tgt_id) in pairs:
@@ -940,7 +943,8 @@ def main():
                             for ltv in ltv_list:
                                 for eps in e_list:
                                     for nit in it_list:
-                                        combos.append((src_id, tgt_id, l1, l2, eps, nit, lsim, ltv))
+                                        for alpha_val in alpha_list:
+                                            combos.append((src_id, tgt_id, l1, l2, eps, nit, lsim, ltv, alpha_val))
 
             print(f"Scheduling {len(combos)} pair-sweep jobs (parallel={args.parallel})...")
             base_output_dir = config['experiment']['output_dir']
@@ -948,8 +952,8 @@ def main():
             results = []
 
             # Extend combos with config_json and base_output_dir for pickle-safe job runner
-            extended_combos = [(src_id, tgt_id, l1, l2, eps, nit, lsim, ltv, config_json, base_output_dir) 
-                               for (src_id, tgt_id, l1, l2, eps, nit, lsim, ltv) in combos]
+            extended_combos = [(src_id, tgt_id, l1, l2, eps, nit, lsim, ltv, alpha_val, config_json, base_output_dir) 
+                               for (src_id, tgt_id, l1, l2, eps, nit, lsim, ltv, alpha_val) in combos]
 
             from concurrent.futures import ProcessPoolExecutor, as_completed
             with ProcessPoolExecutor(max_workers=max(1, args.parallel)) as executor:
