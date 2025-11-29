@@ -240,7 +240,10 @@ class DualTargetPGDAttack:
         early_stop_threshold: Optional[float] = 0.2,  # Early stopping threshold (L_ID < threshold). Set to None to disable.
         convergence_window: int = 1000,  # Number of recent iterations to check for convergence
         convergence_tolerance: float = 1e-6,  # Loss change tolerance for convergence detection
-        min_iter_for_convergence: int = 1000  # Minimum iterations before checking convergence
+        min_iter_for_convergence: int = 1000,  # Minimum iterations before checking convergence
+        maximize_similarity: bool = False,  # If True, maximize similarity (L_ID = 1 - cos_sim) instead of minimizing
+        random_init: bool = False,  # If True, initialize delta with random noise instead of zeros
+        target_type: str = 'image'  # Target type: 'image', 'noise', 'zero', 'uniform', 'entropy'
     ):
         self.identity_extractor = identity_extractor
         self.epsilon = epsilon
@@ -267,6 +270,9 @@ class DualTargetPGDAttack:
         self.convergence_window = int(convergence_window)
         self.convergence_tolerance = float(convergence_tolerance)
         self.min_iter_for_convergence = int(min_iter_for_convergence)
+        self.maximize_similarity = bool(maximize_similarity)
+        self.random_init = bool(random_init)
+        self.target_type = str(target_type)  # 'image', 'noise', 'zero', 'uniform', 'entropy'
         
         # Initialize LPIPS model if needed
         self.lpips_model = None
@@ -331,14 +337,16 @@ class DualTargetPGDAttack:
         )
         return M1, M2
     
-    def attack(self, image_path: str, output_dir: Optional[str] = None, output_prefix: str = "target") -> np.ndarray:
+    def attack(self, image_path: str, output_dir: Optional[str] = None, output_prefix: str = "target", target_image_path: Optional[str] = None) -> np.ndarray:
         """
         Execute dual-target PGD attack.
         
         Args:
-            image_path: Path to input image
+            image_path: Path to input image to attack
             output_dir: Directory to save results
             output_prefix: Prefix for output files
+            target_image_path: Optional path to target identity image. If None, uses image_path's identity (self-attack).
+                              For dual-target attack: source attack should use target image, target attack should use source image.
             
         Returns:
             Adversarial image as numpy array
@@ -378,19 +386,78 @@ class DualTargetPGDAttack:
         if self.verbose:
             print(f"Generated masks - M1: {M1.sum()/M1.numel():.2%} face, M2: {M2.sum()/M2.numel():.2%} background")
         
-        # 3. Extract target features (clean face)
-        with torch.no_grad():
-            preprocessed_face = ImageProcessor.preprocess_for_model_tensor(image_tensor * M1)
-            target_latents, target_f4_from_face = self.identity_extractor(preprocessed_face)
+        # 2.5. Extract full image f4 features for structure_weakening (from original image, not target)
+        # This is needed for semantic loss regardless of target_type
+        if self.sem_variant == 'structure_weakening':
+            with torch.no_grad():
+                original_full_preprocessed = ImageProcessor.preprocess_for_model_tensor(image_tensor)
+                _, self._target_f4_full = self.identity_extractor(original_full_preprocessed)
+        
+        # 3. Extract target features based on target_type
+        if self.target_type == 'entropy':
+            # No target needed for entropy maximization
+            target_latents = None
+            target_f4_from_face = None
+            if self.verbose:
+                print(f"Target type: entropy (no target extraction needed)")
+        elif self.target_type in ['zero', 'zero-l1', 'zero-huber']:
+            # Zero target: will be created after we know latent shape
+            target_latents = None
+            target_f4_from_face = None
+            if self.verbose:
+                loss_type = self.target_type.split('-')[1] if '-' in self.target_type else 'mse'
+                print(f"Target type: {self.target_type} (will create zero vector after getting latent shape, loss={loss_type})")
+        elif self.target_type == 'uniform':
+            # Uniform target: will be created after we know latent shape
+            target_latents = None
+            target_f4_from_face = None
+            if self.verbose:
+                print(f"Target type: uniform (will create uniform vector after getting latent shape)")
+        elif self.target_type == 'noise':
+            # Noise target: generate noise image and extract latents
+            # Use full noise image (no mask) - noise has no identity information regardless of region
+            if self.verbose:
+                print(f"Target type: noise (generating Gaussian noise image, using full image without mask)")
+            # Generate Gaussian noise in [0, 255] range
+            noise_tensor = torch.randn_like(image_tensor) * 127.5 + 127.5  # Mean 127.5, std 127.5
+            noise_tensor = torch.clamp(noise_tensor, 0, 255)
             
-            # For structure_weakening variant, also extract clean structure from full image
-            # This is cached to avoid recomputation in each iteration
-            if self.sem_variant == 'structure_weakening':
-                clean_preprocessed = ImageProcessor.preprocess_for_model_tensor(image_tensor)
-                _, self._target_f4_full = self.identity_extractor(clean_preprocessed)
+            # Extract latents from full noise image (no mask needed - noise has no identity)
+            with torch.no_grad():
+                noise_preprocessed = ImageProcessor.preprocess_for_model_tensor(noise_tensor)
+                target_latents, target_f4_from_face = self.identity_extractor(noise_preprocessed)
+                if self.verbose:
+                    print(f"Extracted noise target latents: shape {target_latents.shape}")
+        else:
+            # Default: 'image' - use target_image_path or image_path
+            if self.verbose:
+                print(f"Target type: image (using {'target' if target_image_path else 'source'} identity)")
+            target_identity_path = target_image_path if target_image_path is not None else image_path
+            target_image_np = ImageProcessor.load_image(target_identity_path, target_size=(256, 256))
+            target_image_np = ImageProcessor.apply_preprocessing(target_image_np, mode=self.preproc_mode)
+            if target_image_np is None:
+                raise ValueError(f"Failed to load target identity image: {target_identity_path}")
+            
+            target_image_tensor = torch.from_numpy(target_image_np.transpose(2, 0, 1)).float().unsqueeze(0).to(self.device)
+            
+            # Generate masks for target identity image (needed for face region extraction)
+            target_M1, _ = self.generate_masks(target_image_np)
+            
+            with torch.no_grad():
+                target_preprocessed_face = ImageProcessor.preprocess_for_model_tensor(target_image_tensor * M1)
+                target_latents, target_f4_from_face = self.identity_extractor(target_preprocessed_face)
+                
+                # Note: _target_f4_full is already extracted from original image above (for structure_weakening)
+                # It's not extracted from target image, as structure_weakening compares against original structure
         
         # 4. Initialize perturbation
-        delta = torch.zeros_like(image_tensor, requires_grad=True).to(self.device)
+        if self.random_init:
+            # Random initialization: uniform random in [-epsilon, epsilon]
+            delta = torch.empty_like(image_tensor, requires_grad=True).to(self.device)
+            delta.data.uniform_(-self.epsilon, self.epsilon)
+        else:
+            # Zero initialization (default)
+            delta = torch.zeros_like(image_tensor, requires_grad=True).to(self.device)
         
         # 5. PGD loop
         for i in range(self.num_iter):
@@ -414,48 +481,111 @@ class DualTargetPGDAttack:
             cos_sim = torch.zeros(1, device=self.device)
             last_grad_norm = 0.0
             
-            # Identity step (eval mode)
+            # Compute all losses first (without backward)
+            # Identity loss (eval mode)
             if lambda_1 > 0:
                 self.identity_extractor.eval()
                 adv_image_face = torch.clamp(image_tensor + delta, 0, 255)
                 adv_face_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_face * M1)
                 adv_latents, _ = self.identity_extractor(adv_face_preprocessed)
-                cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
-                L_ID_loss = cos_sim
-                loss_id = lambda_1 * L_ID_loss
-                loss_id.backward()
-                grad = delta.grad.detach()
-                if self.clip_grad and self.clip_grad > 0:
-                    grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
-                normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
-                delta.data = delta.data - self.alpha * normalized_grad
-                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
-                delta.grad.zero_()
-                last_grad_norm = normalized_grad.abs().mean().item()
+                
+                # Compute target latents if needed (for zero/uniform, create after getting adv_latents shape)
+                if self.target_type in ['zero', 'zero-l1', 'zero-huber']:
+                    target_latents = torch.zeros_like(adv_latents)
+                elif self.target_type == 'uniform':
+                    # Create uniform vector: all elements = 1/dim, then normalize
+                    target_latents = torch.ones_like(adv_latents) / adv_latents.shape[1]
+                    target_latents = F.normalize(target_latents, p=2, dim=1)
+                
+                # Compute L_ID_loss based on target_type
+                if self.target_type == 'entropy':
+                    # Entropy maximization: maximize entropy of adv_latents
+                    probs = F.softmax(adv_latents, dim=1)
+                    entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+                    L_ID_loss = -entropy  # Minimize negative entropy = maximize entropy
+                elif self.target_type == 'zero':
+                    # Zero target: use MSE (default)
+                    L_ID_loss = F.mse_loss(adv_latents, target_latents)
+                elif self.target_type == 'zero-l1':
+                    # Zero target: use L1 loss (more robust to outliers)
+                    L_ID_loss = F.l1_loss(adv_latents, target_latents)
+                elif self.target_type == 'zero-huber':
+                    # Zero target: use Huber loss (smooth L1, robust to outliers)
+                    delta_huber = adv_latents - target_latents
+                    huber_delta = 1.0  # Huber loss threshold
+                    abs_delta = torch.abs(delta_huber)
+                    quadratic = torch.clamp(abs_delta, max=huber_delta)
+                    linear = abs_delta - quadratic
+                    L_ID_loss = (0.5 * quadratic.pow(2) + huber_delta * linear).mean()
+                elif self.target_type == 'uniform':
+                    # Uniform target: use MSE
+                    L_ID_loss = F.mse_loss(adv_latents, target_latents)
+                else:
+                    # Default: cosine similarity (for 'image' and 'noise')
+                    if target_latents is None:
+                        raise ValueError(f"target_latents is None for target_type={self.target_type}")
+                    cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
+                    # If maximize_similarity=True, use (1 - cos_sim) to maximize similarity
+                    # If False, use cos_sim to minimize similarity (identity destruction)
+                    if self.maximize_similarity:
+                        L_ID_loss = 1.0 - cos_sim
+                    else:
+                        L_ID_loss = cos_sim
             else:
                 self.identity_extractor.eval()
                 with torch.no_grad():
                     adv_image_face = torch.clamp(image_tensor + delta, 0, 255)
                     adv_face_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_face * M1)
                     adv_latents, _ = self.identity_extractor(adv_face_preprocessed)
-                    cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
-                    L_ID_loss = cos_sim
+                    
+                    # Compute target latents if needed (for zero/uniform)
+                    if self.target_type in ['zero', 'zero-l1', 'zero-huber']:
+                        target_latents = torch.zeros_like(adv_latents)
+                    elif self.target_type == 'uniform':
+                        target_latents = torch.ones_like(adv_latents) / adv_latents.shape[1]
+                        target_latents = F.normalize(target_latents, p=2, dim=1)
+                    
+                    # Compute L_ID_loss based on target_type
+                    if self.target_type == 'entropy':
+                        probs = F.softmax(adv_latents, dim=1)
+                        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+                        L_ID_loss = -entropy
+                    elif self.target_type == 'zero':
+                        # Zero target: use MSE (default)
+                        L_ID_loss = F.mse_loss(adv_latents, target_latents)
+                    elif self.target_type == 'zero-l1':
+                        # Zero target: use L1 loss (more robust to outliers)
+                        L_ID_loss = F.l1_loss(adv_latents, target_latents)
+                    elif self.target_type == 'zero-huber':
+                        # Zero target: use Huber loss (smooth L1, robust to outliers)
+                        delta_huber = adv_latents - target_latents
+                        huber_delta = 1.0  # Huber loss threshold
+                        abs_delta = torch.abs(delta_huber)
+                        quadratic = torch.clamp(abs_delta, max=huber_delta)
+                        linear = abs_delta - quadratic
+                        L_ID_loss = (0.5 * quadratic.pow(2) + huber_delta * linear).mean()
+                    elif self.target_type == 'uniform':
+                        # Uniform target: use MSE
+                        L_ID_loss = F.mse_loss(adv_latents, target_latents)
+                    else:
+                        if target_latents is None:
+                            raise ValueError(f"target_latents is None for target_type={self.target_type}")
+                        cos_sim = F.cosine_similarity(adv_latents, target_latents).mean()
+                        if self.maximize_similarity:
+                            L_ID_loss = 1.0 - cos_sim
+                        else:
+                            L_ID_loss = cos_sim
             
-            # Semantic step (train mode)
+            # Semantic loss (train mode, but compute without backward)
             if lambda_2 > 0:
                 self.identity_extractor.train()
                 
                 if self.sem_variant == 'structure_weakening':
-                    # Structure weakening: Directly target structure feature from full image
-                    # This attacks the Generator's initial input, making it more effective
                     adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
                     adv_full_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
                     _, adv_f4_full = self.identity_extractor(adv_full_preprocessed)
-                    
-                    # Structure weakening: weaken the structure feature
                     L_SEM_loss = F.mse_loss(adv_f4_full, self._target_f4_full * self.structure_weakening_factor)
                 else:
-                    # Original background-only approaches
                     adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
                     adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
                     _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
@@ -473,28 +603,15 @@ class DualTargetPGDAttack:
                         L_SEM_loss = F.relu(margin - (1.0 - cos_bg_face))
                     else:
                         L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
-                
-                loss_sem = lambda_2 * L_SEM_loss
-                loss_sem.backward()
-                grad = delta.grad.detach()
-                if self.clip_grad and self.clip_grad > 0:
-                    grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
-                normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
-                delta.data = delta.data - self.alpha * normalized_grad
-                delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
-                delta.grad.zero_()
-                last_grad_norm = normalized_grad.abs().mean().item()
             else:
                 self.identity_extractor.train()
                 with torch.no_grad():
                     if self.sem_variant == 'structure_weakening':
-                        # Structure weakening: Directly target structure feature from full image
                         adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
                         adv_full_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
                         _, adv_f4_full = self.identity_extractor(adv_full_preprocessed)
                         L_SEM_loss = F.mse_loss(adv_f4_full, self._target_f4_full * self.structure_weakening_factor)
                     else:
-                        # Original background-only approaches
                         adv_image_bg = torch.clamp(image_tensor + delta, 0, 255)
                         adv_bg_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_bg * M2)
                         _, adv_f4_from_bg = self.identity_extractor(adv_bg_preprocessed)
@@ -512,30 +629,22 @@ class DualTargetPGDAttack:
                         else:
                             L_SEM_loss = F.mse_loss(adv_f4_from_bg, target_f4_from_face)
             
-            self.identity_extractor.eval()
-            
             # Similarity preservation loss
             if self.lambda_sim > 0:
                 adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
                 
                 if self.sim_loss_type == 'mse':
-                    # Pixel-level MSE
                     L_sim_loss = F.mse_loss(adv_image_full, image_tensor)
                 elif self.sim_loss_type == 'l1':
-                    # Pixel-level L1
                     L_sim_loss = F.l1_loss(adv_image_full, image_tensor)
                 elif self.sim_loss_type == 'lpips':
-                    # LPIPS perceptual loss
                     if self.lpips_model is not None:
-                        # Convert to LPIPS format: [0, 255] -> [-1, 1]
                         adv_lpips = (adv_image_full / 127.5) - 1.0
                         orig_lpips = (image_tensor / 127.5) - 1.0
                         L_sim_loss = self.lpips_model(adv_lpips, orig_lpips).mean()
                     else:
-                        # Fallback to MSE if LPIPS not available
                         L_sim_loss = F.mse_loss(adv_image_full, image_tensor)
                 elif self.sim_loss_type == 'perceptual':
-                    # Perceptual loss using encoder features
                     adv_preprocessed = ImageProcessor.preprocess_for_model_tensor(adv_image_full)
                     clean_preprocessed = ImageProcessor.preprocess_for_model_tensor(image_tensor)
                     with torch.no_grad():
@@ -544,11 +653,6 @@ class DualTargetPGDAttack:
                     L_sim_loss = F.mse_loss(adv_f4, clean_f4)
                 else:
                     L_sim_loss = torch.zeros(1, device=self.device)
-                
-                # Add similarity loss to gradient (accumulate with existing gradients)
-                loss_sim = self.lambda_sim * L_sim_loss
-                loss_sim.backward(retain_graph=False)
-                # Gradient is accumulated in delta.grad
             else:
                 L_sim_loss = torch.zeros(1, device=self.device)
             
@@ -556,23 +660,27 @@ class DualTargetPGDAttack:
             if self.lambda_tv > 0:
                 adv_image_full = torch.clamp(image_tensor + delta, 0, 255)
                 L_TV_loss = total_variation_loss(delta)
-                loss_tv = self.lambda_tv * L_TV_loss
-                loss_tv.backward(retain_graph=False)
             else:
                 L_TV_loss = torch.zeros(1, device=self.device)
             
-            # Apply accumulated gradients from all losses
+            # Compute total loss and backward once
+            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss) + (self.lambda_tv * L_TV_loss)
+            
+            # Backward on total loss (all gradients accumulated properly)
+            total_loss.backward()
+            
+            # Apply gradients with L2 normalization (preserves lambda direction, ensures consistent step size)
             if delta.grad is not None:
                 grad = delta.grad.detach()
                 if self.clip_grad and self.clip_grad > 0:
                     grad = torch.clamp(grad, -self.clip_grad, self.clip_grad)
+                # L2 normalization: preserves direction (lambda ratio) while ensuring alpha = actual step size
+                # This prevents gradient vanishing/exploding and makes alpha a true distance metric
                 normalized_grad = F.normalize(grad, p=2, dim=[1, 2, 3], eps=1e-8)
                 delta.data = delta.data - self.alpha * normalized_grad
                 delta.data = torch.clamp(delta.data, -self.epsilon, self.epsilon)
                 delta.grad.zero_()
                 last_grad_norm = normalized_grad.abs().mean().item()
-            
-            total_loss = (lambda_1 * L_ID_loss) + (lambda_2 * L_SEM_loss) + (self.lambda_sim * L_sim_loss) + (self.lambda_tv * L_TV_loss)
             
             # Early stopping: check convergence based on loss change (only)
             early_stop = False

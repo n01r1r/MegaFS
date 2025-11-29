@@ -4,51 +4,22 @@ Based on One-Shot-Face-Swapping-on-Megapixels repository
 """
 
 import os
+import sys
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-import torchvision.transforms.functional as tF
-from .resnet import resnet50
-from .hierfe import HieRFE
-from .face_transfer import FaceTransferModule
-from .stylegan2 import Generator
-from .soft_erosion import SoftErosion
-
-
-def encode_segmentation_rgb(segmentation, no_neck=True):
-    """Encode segmentation mask to RGB format"""
-    parse = segmentation[:,:,0]
-
-    face_part_ids = [1, 2, 3, 4, 5, 6, 10, 12, 13] if no_neck else [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14]
-    mouth_id = 11
-    hair_id = 17
-    face_map = np.zeros([parse.shape[0], parse.shape[1]])
-    mouth_map = np.zeros([parse.shape[0], parse.shape[1]])
-    hair_map = np.zeros([parse.shape[0], parse.shape[1]])
-
-    for valid_id in face_part_ids:
-        valid_index = np.where(parse==valid_id)
-        face_map[valid_index] = 255
-    valid_index = np.where(parse==mouth_id)
-    mouth_map[valid_index] = 255
-    valid_index = np.where(parse==hair_id)
-    hair_map[valid_index] = 255
-
-    return np.stack([face_map, mouth_map, hair_map], axis=2)
-
-
 from typing import Any, Dict, Optional, Tuple
-import sys
-import os
-import cv2
-import numpy as np
-import torch
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
+from models.resnet import resnet50
+from models.hierfe import HieRFE
+from models.face_transfer import FaceTransferModule
+from models.stylegan2 import Generator
+from models.soft_erosion import SoftErosion
 from models.model_factory import ModelFactory
 from models.weight_loaders import verify_all_weights
 from utils.image_utils import ImageProcessor, ImageLoader, encode_segmentation_rgb
@@ -129,7 +100,6 @@ class MegaFS(nn.Module):
         self.set_gradient_mode(self.enable_grads)
         
         # Initialize smooth mask
-        from .soft_erosion import SoftErosion
         self.smooth_mask = SoftErosion(kernel_size=17, threshold=0.9, iterations=7)
         self.smooth_mask.to(self.device)
         self.smooth_mask.eval()
@@ -138,21 +108,28 @@ class MegaFS(nn.Module):
         if self.enable_grads:
             self.smooth_mask.train()
         
+        # Verify model initialization with dummy inputs
+        self._verify_initialization()
+    
+    def _verify_initialization(self):
+        """Run dummy inputs to verify model is ready"""
         try:
             dummy_input = torch.randn(1, 3, 256, 256).to(self.device)
             with torch.no_grad():
                 _ = self.encoder(dummy_input)
+            self.debug_logger.log("Encoder initialization verified", "INFO")
         except Exception as e:
-            pass
+            self.debug_logger.log(f"Encoder initialization failed: {e}", "WARNING")
         
         try:
             dummy_struct = torch.randn(1, 512, 4, 4).to(self.device)
             dummy_lats = torch.randn(1, 18, 512).to(self.device)
             with torch.no_grad():
                 _ = self.generator(dummy_struct, [dummy_lats, None], randomize_noise=False)
+            self.debug_logger.log("Generator initialization verified", "INFO")
         except Exception as e:
-            pass
-    
+            self.debug_logger.log(f"Generator initialization failed: {e}", "WARNING")
+
     def set_gradient_mode(self, enabled: bool):
         """Toggle between eval (inference) and train (gradients) mode"""
         self.enable_grads = enabled

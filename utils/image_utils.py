@@ -246,9 +246,8 @@ class ImageProcessor:
             x, y, bw, bh = bbox
             # Center of bbox
             cx, cy = x + bw // 2, y + bh // 2
-            # Minimum radius to contain bbox: half of diagonal
-            # radius = sqrt((bw/2)^2 + (bh/2)^2) = sqrt(bw^2 + bh^2) / 2
-            radius = int(np.ceil(np.sqrt(bw * bw + bh * bh) / 2.0))
+            # Inscribed circle: use smaller side of bbox
+            radius = int(min(bw, bh) / 2.0)
         # Draw filled circle
         cv2.circle(mask, (cx, cy), max(1, radius), 255, -1)
         # Optional blur

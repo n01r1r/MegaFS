@@ -218,9 +218,13 @@ def evaluate_image_pair(
 
 
 def get_image_path(image_id: int, img_root: str) -> str:
-    """Get full path to image."""
-    image_file = f"{image_id:05d}.jpg"
-    return os.path.join(img_root, image_file)
+    """Get full path to image file."""
+    # Prefer non-padded filename (e.g., 1983.jpg). Fallback to 5-digit padded if needed.
+    non_padded = os.path.join(img_root, f"{image_id}.jpg")
+    if os.path.exists(non_padded):
+        return non_padded
+    padded = os.path.join(img_root, f"{image_id:05d}.jpg")
+    return padded if os.path.exists(padded) else non_padded
 
 
 def main():
